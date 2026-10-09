@@ -274,8 +274,7 @@ def _read_hooks_file(path: Path) -> dict[str, Any]:
 def prompt_hook_installed(hooks_path: Path) -> bool:
     event = _read_hooks_file(hooks_path)["hooks"].get("UserPromptSubmit", [])
     return isinstance(event, list) and any(
-        isinstance(group, dict) and any(_is_cx_hook(hook) for hook in group.get("hooks", []))
-        for group in event
+        isinstance(group, dict) and any(_is_cx_hook(hook) for hook in group.get("hooks", [])) for group in event
     )
 
 

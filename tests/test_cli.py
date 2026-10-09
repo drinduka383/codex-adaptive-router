@@ -83,9 +83,7 @@ class CliTests(unittest.TestCase):
             )
             config.write_text(original_config + legacy_block, encoding="utf-8")
             hooks_path = codex_home / "hooks.json"
-            original_hooks = {
-                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/tmp/stop-hook"}]}]}
-            }
+            original_hooks = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/tmp/stop-hook"}]}]}}
             hooks_path.write_text(json.dumps(original_hooks), encoding="utf-8")
             output = io.StringIO()
             with (
