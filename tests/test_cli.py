@@ -130,22 +130,25 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stdin = io.StringIO(
-                json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "thread-test", "prompt": f"$cx {task}"})
+                json.dumps(
+                    {"hook_event_name": "UserPromptSubmit", "session_id": "thread-test", "prompt": f"$cx {task}"}
+                )
             )
             stdout = io.StringIO()
-            completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+            queued = subprocess.CompletedProcess([], 0, stdout="", stderr="")
             with (
                 patch.dict(
                     os.environ,
                     {"XDG_CONFIG_HOME": str(root / "config"), "XDG_STATE_HOME": str(root / "state")},
                 ),
-                patch("codex_adaptive_router.cli.shutil.which", return_value=None),
+                patch("codex_adaptive_router.cli.shutil.which", return_value="codex-test"),
                 patch("codex_adaptive_router.cli.check_chatgpt_auth"),
                 patch(
                     "codex_adaptive_router.cli.read_registry",
                     return_value=({luna.model_id: luna, sol.model_id: sol}, {"catalog_hash": "test-hash"}),
                 ),
-                patch("codex_adaptive_router.cli.subprocess.run", return_value=completed) as queue,
+                patch("codex_adaptive_router.cli.apply_thread_settings", return_value=True) as update,
+                patch("codex_adaptive_router.cli.subprocess.run", return_value=queued) as queue,
                 patch("sys.stdin", stdin),
                 contextlib.redirect_stdout(stdout),
             ):
@@ -154,6 +157,9 @@ class CliTests(unittest.TestCase):
             response = json.loads(stdout.getvalue())
             self.assertEqual(response["decision"], "block")
             self.assertIn("gpt-6-luna", response["systemMessage"])
+            update.assert_called_once()
+            self.assertEqual(update.call_args.args[0], "thread-test")
+            self.assertEqual(update.call_args.args[1].model_id, "gpt-6-luna")
             queued_command = queue.call_args.args[0]
             self.assertEqual(queued_command[queued_command.index("--thread") + 1], "thread-test")
             self.assertEqual(queued_command[queued_command.index("--message") + 1], task)
@@ -202,6 +208,7 @@ class CliTests(unittest.TestCase):
                 patch("codex_adaptive_router.cli._codex_bin", return_value="codex-test"),
                 patch("codex_adaptive_router.cli.check_chatgpt_auth"),
                 patch("codex_adaptive_router.cli.read_registry", return_value=(models, {})),
+                patch("codex_adaptive_router.cli.apply_thread_settings", return_value=True),
                 patch("codex_adaptive_router.cli.subprocess.run", return_value=failed),
                 patch("sys.stdin", stdin),
                 contextlib.redirect_stdout(stdout),

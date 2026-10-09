@@ -27,6 +27,7 @@ from .discovery import (
 from .evaluation import run_evaluation, validate_evaluation_request
 from .execution import build_interactive_command, check_chatgpt_auth, run_interactive, safe_environment
 from .hooks import (
+    apply_thread_settings,
     codex_config_path,
     codex_hooks_path,
     handle_prompt_submit,
@@ -683,6 +684,7 @@ def _hook_submit(env: dict[str, str]) -> int:
         event,
         state_dir=state_dir,
         route_for_task=route_for_task,
+        update_thread_settings=lambda thread_id, decision: apply_thread_settings(thread_id, decision, env=env),
         queue=queue,
         codex_bin=codex_bin,
     )

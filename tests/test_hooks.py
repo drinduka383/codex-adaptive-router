@@ -1,9 +1,12 @@
+import inspect
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from codex_adaptive_router.hooks import (
+    apply_thread_settings,
     build_queue_command,
     consume_handoff,
     handle_prompt_submit,
@@ -31,7 +34,99 @@ def decision(mode="luna", model_id="model-a", effort="low", service_tier="defaul
     )
 
 
+def submit_prompt(*args, **kwargs):
+    kwargs.setdefault("update_thread_settings", lambda *_: True)
+    return handle_prompt_submit(*args, **kwargs)
+
+
 class HookTests(unittest.TestCase):
+    def test_thread_settings_use_initialized_unix_websocket_before_update(self):
+        import base64
+        import hashlib
+
+        class FakeSocket:
+            def __init__(self):
+                self.incoming = bytearray()
+                self.messages = []
+                self.request = ""
+
+            def settimeout(self, _timeout):
+                pass
+
+            def connect(self, _path):
+                pass
+
+            def close(self):
+                pass
+
+            def recv(self, size):
+                chunk = bytes(self.incoming[:size])
+                del self.incoming[:size]
+                return chunk
+
+            def sendall(self, data):
+                if data.startswith(b"GET "):
+                    self.request = data.decode()
+                    key = next(
+                        line.split(":", 1)[1].strip()
+                        for line in self.request.split("\r\n")
+                        if line.lower().startswith("sec-websocket-key:")
+                    )
+                    accept = base64.b64encode(
+                        hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+                    ).decode()
+                    self.incoming.extend(
+                        (
+                            "HTTP/1.1 101 Switching Protocols\r\n"
+                            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                            f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
+                        ).encode()
+                    )
+                    return
+                first, second = data[:2]
+                size = second & 0x7F
+                offset = 2
+                if size == 126:
+                    size = int.from_bytes(data[offset:offset + 2], "big")
+                    offset += 2
+                elif size == 127:
+                    size = int.from_bytes(data[offset:offset + 8], "big")
+                    offset += 8
+                mask = data[offset:offset + 4]
+                offset += 4
+                payload = bytes(value ^ mask[i % 4] for i, value in enumerate(data[offset:offset + size]))
+                message = json.loads(payload)
+                self.messages.append(message)
+                if message.get("id") in {1, 2}:
+                    response = json.dumps({"id": message["id"], "result": {}}, separators=(",", ":")).encode()
+                    self.incoming.extend(bytes((0x81, len(response))) + response)
+                self.assert_text_opcode = first & 0x0F
+
+        fake_socket = FakeSocket()
+        with (
+            patch("codex_adaptive_router.hooks._app_server_socket_paths", return_value=[Path("server.sock")]),
+            patch("codex_adaptive_router.hooks.socket.socket", return_value=fake_socket),
+        ):
+            applied = apply_thread_settings(
+                "thread-123",
+                decision("sol", "model-sol", "medium", "fast"),
+                env={},
+            )
+
+        self.assertTrue(applied)
+        self.assertIn("Upgrade: websocket", fake_socket.request)
+        self.assertEqual(
+            [message["method"] for message in fake_socket.messages],
+            ["initialize", "initialized", "thread/settings/update"],
+        )
+        self.assertEqual(fake_socket.assert_text_opcode, 1)
+        self.assertEqual(fake_socket.messages[2]["params"], {
+            "threadId": "thread-123",
+            "model": "model-sol",
+            "effort": "medium",
+            "serviceTier": "fast",
+        })
+
     def test_queue_command_keeps_prompt_as_one_argument_and_selects_turn_settings(self):
         task = "inspect this; do not run shell commands"
         command = build_queue_command(decision(), task, "thread-123", codex_bin="codex-test")
@@ -59,7 +154,7 @@ class HookTests(unittest.TestCase):
     def test_successful_handoff_says_model_is_requested_until_codex_confirms_it(self):
         with tempfile.TemporaryDirectory() as directory:
             event = {"hook_event_name": "UserPromptSubmit", "session_id": "thread-123", "prompt": "$cx inspect module"}
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 event,
                 state_dir=Path(directory),
                 route_for_task=lambda task: decision(),
@@ -79,14 +174,14 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory)
             event = {"hook_event_name": "UserPromptSubmit", "session_id": "thread-123", "prompt": "$cx inspect module"}
-            handle_prompt_submit(
+            submit_prompt(
                 event,
                 state_dir=state_dir,
                 route_for_task=lambda task: decision(),
                 queue=lambda command: 0,
             )
 
-            confirmation = handle_prompt_submit(
+            confirmation = submit_prompt(
                 {**event, "prompt": "inspect module", "model": "model-a"},
                 state_dir=state_dir,
                 route_for_task=lambda task: self.fail("a handed-off prompt must not be routed again"),
@@ -102,14 +197,14 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory)
             event = {"hook_event_name": "UserPromptSubmit", "session_id": "thread-123", "prompt": "$cx inspect module"}
-            handle_prompt_submit(
+            submit_prompt(
                 event,
                 state_dir=state_dir,
                 route_for_task=lambda task: decision(),
                 queue=lambda command: 0,
             )
 
-            confirmation = handle_prompt_submit(
+            confirmation = submit_prompt(
                 {**event, "prompt": "inspect module", "model": "model-b"},
                 state_dir=state_dir,
                 route_for_task=lambda task: self.fail("a handed-off prompt must not be routed again"),
@@ -124,14 +219,14 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory)
             event = {"hook_event_name": "UserPromptSubmit", "session_id": "thread-123", "prompt": "$cx inspect module"}
-            handle_prompt_submit(
+            submit_prompt(
                 event,
                 state_dir=state_dir,
                 route_for_task=lambda task: decision(),
                 queue=lambda command: 0,
             )
 
-            confirmation = handle_prompt_submit(
+            confirmation = submit_prompt(
                 {**event, "prompt": "inspect module"},
                 state_dir=state_dir,
                 route_for_task=lambda task: self.fail("a handed-off prompt must not be routed again"),
@@ -150,7 +245,7 @@ class HookTests(unittest.TestCase):
                 "prompt": "$cx inspect three independent modules",
             }
             queued_command = []
-            handle_prompt_submit(
+            submit_prompt(
                 event,
                 state_dir=state_dir,
                 route_for_task=lambda task: decision("orchestrated", "root-model", "medium"),
@@ -158,7 +253,7 @@ class HookTests(unittest.TestCase):
             )
             queued_prompt = queued_command[queued_command.index("--message") + 1]
 
-            confirmation = handle_prompt_submit(
+            confirmation = submit_prompt(
                 {**event, "prompt": queued_prompt, "model": "root-model"},
                 state_dir=state_dir,
                 route_for_task=lambda task: self.fail("an orchestrated handoff must not be routed again"),
@@ -169,7 +264,7 @@ class HookTests(unittest.TestCase):
 
     def test_queue_failure_blocks_explicit_cx_task_and_does_not_leave_a_loop_guard(self):
         with tempfile.TemporaryDirectory() as directory:
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 {"hook_event_name": "UserPromptSubmit", "session_id": "thread-123", "prompt": "$cx inspect module"},
                 state_dir=Path(directory),
                 route_for_task=lambda task: decision(),
@@ -187,7 +282,7 @@ class HookTests(unittest.TestCase):
             raise RuntimeError(f"could not route {task}")
 
         with tempfile.TemporaryDirectory() as directory:
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 {
                     "hook_event_name": "UserPromptSubmit",
                     "session_id": "thread-123",
@@ -205,14 +300,14 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_dir = Path(directory)
             event = {"hook_event_name": "UserPromptSubmit", "session_id": "thread-123", "prompt": "$cx inspect module"}
-            handle_prompt_submit(
+            submit_prompt(
                 event,
                 state_dir=state_dir,
                 route_for_task=lambda task: decision(),
                 queue=lambda command: 0,
                 codex_bin="codex-test",
             )
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 {**event, "prompt": "inspect module"},
                 state_dir=state_dir,
                 route_for_task=lambda task: self.fail("a handoff must not be routed recursively"),
@@ -226,7 +321,7 @@ class HookTests(unittest.TestCase):
 
     def test_ordinary_prompt_passes_through_without_routing(self):
         with tempfile.TemporaryDirectory() as directory:
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 {
                     "hook_event_name": "UserPromptSubmit",
                     "session_id": "thread-123",
@@ -244,7 +339,7 @@ class HookTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             routed_tasks = []
             command = []
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 {
                     "hook_event_name": "UserPromptSubmit",
                     "session_id": "thread-123",
@@ -259,9 +354,69 @@ class HookTests(unittest.TestCase):
             self.assertEqual(command[command.index("--message") + 1], "inspect module")
             self.assertEqual(outcome.status, "queued")
 
+    def test_namespaced_plugin_skill_invocation_is_routed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            routed_tasks = []
+            command = []
+            outcome = submit_prompt(
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "thread-123",
+                    "prompt": "$codex-adaptive-router:cx inspect module",
+                },
+                state_dir=Path(directory),
+                route_for_task=lambda task: routed_tasks.append(task) or decision(),
+                queue=lambda args: command.extend(args) or 0,
+            )
+
+            self.assertEqual(routed_tasks, ["inspect module"])
+            self.assertEqual(command[command.index("--message") + 1], "inspect module")
+            self.assertEqual(outcome.status, "queued")
+
+    def test_active_thread_settings_are_updated_before_prompt_queueing(self):
+        self.assertIn("update_thread_settings", inspect.signature(handle_prompt_submit).parameters)
+        with tempfile.TemporaryDirectory() as directory:
+            calls = []
+            outcome = submit_prompt(
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "thread-123",
+                    "prompt": "$cx inspect module",
+                },
+                state_dir=Path(directory),
+                route_for_task=lambda task: decision("sol", "model-sol", "medium"),
+                update_thread_settings=lambda thread_id, route: calls.append(
+                    ("settings", thread_id, route.model_id)
+                ) or True,
+                queue=lambda command: calls.append(
+                    ("queue", command[command.index("--model") + 1])
+                ) or 0,
+            )
+
+            self.assertEqual(calls, [("settings", "thread-123", "model-sol"), ("queue", "model-sol")])
+            self.assertEqual(outcome.status, "queued")
+
+    def test_failed_thread_model_update_blocks_without_queueing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            outcome = submit_prompt(
+                {
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "thread-123",
+                    "prompt": "$cx inspect module",
+                },
+                state_dir=Path(directory),
+                route_for_task=lambda task: decision("sol", "model-sol", "medium"),
+                update_thread_settings=lambda thread_id, route: False,
+                queue=lambda command: self.fail("queue must wait until the active model is updated"),
+            )
+
+            self.assertEqual(outcome.status, "settings_update_failed")
+            self.assertEqual(outcome.response["decision"], "block")
+            self.assertIn("not queued", outcome.response["systemMessage"])
+
     def test_empty_cx_invocation_is_blocked_with_usage(self):
         with tempfile.TemporaryDirectory() as directory:
-            outcome = handle_prompt_submit(
+            outcome = submit_prompt(
                 {
                     "hook_event_name": "UserPromptSubmit",
                     "session_id": "thread-123",

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
+import secrets
 import shlex
 import shutil
+import socket
+import stat
 import subprocess
 import tempfile
 import time
@@ -21,6 +25,7 @@ _BEGIN = "# BEGIN CODEX ADAPTIVE ROUTER (cx)"
 _END = "# END CODEX ADAPTIVE ROUTER (cx)"
 _CX_STATUS_MESSAGE = "cx is checking for an explicit $cx request"
 _OLD_CX_STATUS_MESSAGE = "cx is selecting a model for this turn"
+_CX_PREFIXES = ("$cx", "$codex-adaptive-router:cx")
 # shortcut: one pending handoff per session for 30s; use turn IDs if concurrent queued prompts are added.
 _HANDOFF_TTL_SECONDS = 30
 
@@ -160,12 +165,210 @@ def _queue_returncode(result: Any) -> int:
     return result.returncode if hasattr(result, "returncode") else int(result)
 
 
+def _app_server_socket_paths(env: dict[str, str] | None = None) -> list[Path]:
+    values = os.environ if env is None else env
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        raise RuntimeError("Live thread routing requires a Unix Codex app-server.")
+    uid = getuid()
+    socket_root = Path(values.get("TMPDIR") or tempfile.gettempdir()).expanduser() / f"codex-daemon-{uid}"
+    try:
+        root_info = socket_root.lstat()
+    except OSError as exc:
+        raise RuntimeError("No running Codex app-server socket was found.") from exc
+    if (
+        not stat.S_ISDIR(root_info.st_mode)
+        or root_info.st_uid != uid
+        or stat.S_IMODE(root_info.st_mode) & 0o077
+    ):
+        raise RuntimeError("The Codex app-server socket directory is not private; refusing to use it.")
+    sockets = []
+    for path in socket_root.iterdir():
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISSOCK(info.st_mode) and info.st_uid == uid:
+            sockets.append(path)
+    if not sockets:
+        raise RuntimeError("No running Codex app-server socket was found.")
+    return sockets[:8]
+
+
+def apply_thread_settings(
+    thread_id: str,
+    decision: RoutingDecision,
+    *,
+    env: dict[str, str] | None = None,
+) -> bool:
+    last_error = None
+    for path in _app_server_socket_paths(env):
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(5)
+        buffered = bytearray()
+
+        def read_exact(size: int) -> bytes:
+            while len(buffered) < size:
+                chunk = connection.recv(max(4096, size - len(buffered)))
+                if not chunk:
+                    raise RuntimeError("Codex closed the app-server connection.")
+                buffered.extend(chunk)
+            data = bytes(buffered[:size])
+            del buffered[:size]
+            return data
+
+        def send_frame(payload: bytes, opcode: int = 1) -> None:
+            mask = secrets.token_bytes(4)
+            size = len(payload)
+            if size < 126:
+                header = bytes((0x80 | opcode, 0x80 | size))
+            elif size < 65_536:
+                header = bytes((0x80 | opcode, 0x80 | 126)) + size.to_bytes(2, "big")
+            else:
+                header = bytes((0x80 | opcode, 0x80 | 127)) + size.to_bytes(8, "big")
+            connection.sendall(header + mask + bytes(value ^ mask[i % 4] for i, value in enumerate(payload)))
+
+        def receive_message() -> bytes:
+            fragments = bytearray()
+            fragment_opcode = None
+            while True:
+                first, second = read_exact(2)
+                final = bool(first & 0x80)
+                opcode = first & 0x0F
+                size = second & 0x7F
+                if size == 126:
+                    size = int.from_bytes(read_exact(2), "big")
+                elif size == 127:
+                    size = int.from_bytes(read_exact(8), "big")
+                if size > 1_048_576:
+                    raise RuntimeError("Codex sent an oversized app-server response.")
+                mask = read_exact(4) if second & 0x80 else None
+                payload = read_exact(size)
+                if mask:
+                    payload = bytes(value ^ mask[i % 4] for i, value in enumerate(payload))
+                if opcode == 8:
+                    raise RuntimeError("Codex closed the app-server connection.")
+                if opcode == 9:
+                    send_frame(payload, 10)
+                    continue
+                if opcode in (1, 2):
+                    fragments = bytearray(payload)
+                    fragment_opcode = opcode
+                elif opcode == 0 and fragment_opcode is not None:
+                    fragments.extend(payload)
+                else:
+                    continue
+                if final:
+                    if fragment_opcode != 1:
+                        raise RuntimeError("Codex sent a non-text app-server response.")
+                    return bytes(fragments)
+
+        def send_message(message: dict[str, Any]) -> None:
+            send_frame(json.dumps(message, separators=(",", ":")).encode())
+
+        def receive_response(request_id: int, method: str) -> dict[str, Any]:
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                connection.settimeout(max(0.1, deadline - time.monotonic()))
+                try:
+                    response = json.loads(receive_message())
+                except json.JSONDecodeError as exc:
+                    raise RuntimeError("Codex sent invalid JSON over the app-server socket.") from exc
+                if not isinstance(response, dict) or response.get("id") != request_id:
+                    continue
+                if "error" in response:
+                    code = (
+                        response["error"].get("code", "unknown")
+                        if isinstance(response["error"], dict)
+                        else "unknown"
+                    )
+                    raise RuntimeError(f"Codex rejected {method} (RPC error {code}).")
+                if "result" not in response:
+                    raise RuntimeError(f"Codex returned no result for {method}.")
+                return response
+            raise RuntimeError(f"Codex did not acknowledge {method}.")
+
+        try:
+            connection.connect(str(path))
+            key = base64.b64encode(secrets.token_bytes(16)).decode("ascii")
+            connection.sendall(
+                (
+                    "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                    f"Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n\r\n"
+                ).encode()
+            )
+            while b"\r\n\r\n" not in buffered:
+                chunk = connection.recv(4096)
+                if not chunk:
+                    raise RuntimeError("Codex closed the app-server connection during WebSocket handshake.")
+                buffered.extend(chunk)
+                if len(buffered) > 16_384:
+                    raise RuntimeError("Codex returned oversized WebSocket headers.")
+            end = buffered.index(b"\r\n\r\n") + 4
+            headers = bytes(buffered[:end])
+            del buffered[:end]
+            lines = headers.split(b"\r\n")
+            parsed_headers = {
+                line.split(b":", 1)[0].lower(): line.split(b":", 1)[1].strip().decode("ascii", "ignore")
+                for line in lines[1:]
+                if b":" in line
+            }
+            expected_accept = base64.b64encode(
+                hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()
+            ).decode("ascii")
+            accepted = parsed_headers.get(b"sec-websocket-accept") == expected_accept
+            if not lines[0].startswith(b"HTTP/1.1 101 ") or not accepted:
+                raise RuntimeError("Codex rejected the app-server WebSocket handshake.")
+
+            send_message(
+                {
+                    "method": "initialize",
+                    "id": 1,
+                    "params": {
+                        "clientInfo": {
+                            "name": "codex-adaptive-router",
+                            "title": "Codex Adaptive Router",
+                            "version": "0.1.0",
+                        },
+                        "capabilities": {"experimentalApi": True},
+                    },
+                }
+            )
+            receive_response(1, "initialize")
+            send_message({"method": "initialized", "params": {}})
+            send_message(
+                {
+                    "method": "thread/settings/update",
+                    "id": 2,
+                    "params": {
+                        "threadId": thread_id,
+                        "model": decision.model_id,
+                        "effort": decision.effort,
+                        **({"serviceTier": decision.service_tier} if decision.service_tier else {}),
+                    },
+                }
+            )
+            receive_response(2, "thread/settings/update")
+            return True
+        except (OSError, ValueError, RuntimeError) as exc:
+            last_error = (
+                str(exc)
+                if isinstance(exc, RuntimeError)
+                else f"Codex socket unavailable ({type(exc).__name__})."
+            )
+        finally:
+            connection.close()
+
+    raise RuntimeError(last_error or "Codex did not apply the selected thread settings.")
+
+
 def _cx_task(prompt: str) -> str | None:
     text = prompt.lstrip()
-    if text == "$cx":
-        return ""
-    if text.startswith("$cx") and len(text) > 3 and text[3].isspace():
-        return text[3:].strip()
+    for prefix in _CX_PREFIXES:
+        if text == prefix:
+            return ""
+        if text.startswith(prefix) and len(text) > len(prefix) and text[len(prefix)].isspace():
+            return text[len(prefix):].strip()
     return None
 
 
@@ -174,6 +377,7 @@ def handle_prompt_submit(
     *,
     state_dir: Path,
     route_for_task,
+    update_thread_settings,
     queue,
     codex_bin: str = "codex",
 ) -> HookOutcome:
@@ -246,6 +450,38 @@ def handle_prompt_submit(
 
     try:
         command = build_queue_command(decision, task, session_id, codex_bin=codex_bin)
+    except (OSError, ValueError):
+        return HookOutcome(
+            {
+                "decision": "block",
+                "reason": "cx could not prepare this explicit routed request.",
+                "systemMessage": "cx could not prepare the routed turn; this explicit request is blocked. "
+                "Check `cx doctor`, then retry with `$cx <task>`.",
+            },
+            decision,
+            "queue_failed",
+        )
+    update_error = None
+    try:
+        updated = update_thread_settings(session_id, decision)
+    except (OSError, RuntimeError, subprocess.SubprocessError, ValueError) as exc:
+        updated = False
+        update_error = str(exc)
+    if not updated:
+        detail = update_error or "Codex did not confirm the per-thread settings update."
+        return HookOutcome(
+            {
+                "decision": "block",
+                "reason": "cx could not apply the selected model to this conversation.",
+                "systemMessage": (
+                    f"cx could not apply model {decision.model_id} to the active thread ({detail}); the explicit "
+                    "request was not queued."
+                ),
+            },
+            decision,
+            "settings_update_failed",
+        )
+    try:
         queued_prompt = command[command.index("--message") + 1]
         mark_handoff(state_dir, session_id, queued_prompt, decision)
     except (OSError, ValueError):
@@ -254,7 +490,7 @@ def handle_prompt_submit(
                 "decision": "block",
                 "reason": "cx could not prepare this explicit routed request.",
                 "systemMessage": "cx could not prepare the routed turn; this explicit request is blocked. "
-                "Check `cx doctor`, then retry with `$cx <task>`."
+                "Check `cx doctor`, then retry with `$cx <task>`.",
             },
             decision,
             "queue_failed",

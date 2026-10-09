@@ -26,7 +26,7 @@ Run `cx models` to inspect advertised efforts. Use `cx --model <id> --effort <le
 
 ## The regular TUI did not route a prompt
 
-Run `cx hooks status`, open a new session after installation, and use `/hooks` to review/trust the local command hook. The first notice says which route was requested. The queued prompt's second hook pass reports whether Codex's active model matches, differs, or was unavailable. `/status` also shows the active model. If `cx` reports a mismatch or says the model is unverified, that explicit `$cx` task is blocked. Correct the router or session before retrying; do not infer that the requested model ran. Share only the Codex CLI version and sanitized routing status; never share auth files or prompt text.
+Run `cx hooks status`, open a new session after installation, and use `/hooks` to review/trust the local command hook. The hook first applies the selected model to the active conversation through the running app-server's Unix WebSocket, then queues the task. The queued prompt's second hook pass reports whether Codex's active model matches, differs, or was unavailable. `/status` also shows the active model. If the settings update fails, the hook reports the sanitized app-server/RPC error and does not queue the task. If `cx` reports a mismatch or says the model is unverified, that explicit `$cx` task is blocked. Correct the router or session before retrying; do not infer that the requested model ran. Share only the Codex CLI version and sanitized routing status; never share auth files or prompt text.
 
 ## A routed task exited successfully but seems incomplete
 
