@@ -24,6 +24,10 @@ Run `cx models` to inspect advertised efforts. Use `cx --model <id> --effort <le
 
 `cx` enables the coordinator model's catalogued multi-agent version only for the orchestrated route and asks the coordinator to delegate when worthwhile. A task with tightly coupled edits may remain single-agent. `cx` cannot confirm child model or effort assignment from all CLI traces. Check `cx doctor` for the CLI feature status and `cx models` for the model's advertised version.
 
+## The regular TUI did not route a prompt
+
+Run `cx hooks status`, open a new session after installation, and use `/hooks` to review/trust the local command hook. The original prompt is blocked only when `codex queue` confirms the same-session handoff; otherwise it continues on the current model. Look for the visible `cx routed this turn to ...` message and check `/status` or the model picker for the active model. If the message and indicator disagree, uninstall the hook with `cx hooks uninstall` and report the Codex CLI version plus the sanitized routing status (do not share auth files or prompt text).
+
 ## A routed task exited successfully but seems incomplete
 
 An exit code is process status, not proof of correct code. Inspect the diff, run the repository's verification, and record `failure` or verified `success` with `cx feedback`. The router does not automatically replay partial edits.

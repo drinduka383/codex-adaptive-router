@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -24,12 +25,29 @@ from .discovery import (
     write_registry,
 )
 from .evaluation import run_evaluation, validate_evaluation_request
-from .execution import build_interactive_command, check_chatgpt_auth, run_interactive
+from .execution import build_interactive_command, check_chatgpt_auth, run_interactive, safe_environment
+from .hooks import (
+    codex_config_path,
+    handle_prompt_submit,
+    install_prompt_hook,
+    prompt_hook_installed,
+    remove_prompt_hook,
+)
 from .metrics import append_event, config_directory, new_run_id, read_events, state_directory, update_feedback, utc_now
 from .models import ModelCapability, RoutingDecision
 from .policy import route_task
 
-MANAGEMENT_COMMANDS = {"models", "config", "doctor", "explain", "evaluate", "status", "feedback", "update"}
+MANAGEMENT_COMMANDS = {
+    "models",
+    "config",
+    "doctor",
+    "explain",
+    "evaluate",
+    "status",
+    "feedback",
+    "update",
+    "hooks",
+}
 HELP = """cx — local, model-agnostic Codex CLI routing
 
 Usage:
@@ -41,6 +59,7 @@ Usage:
   cx evaluate --models ID[,ID] [--mode direct|orchestrated] [--fast] --confirm-usage [--cases FILE]
   cx status
   cx feedback RUN_ID success|failure [--verified]
+  cx hooks [status|install|uninstall]
 
 Run options: --model ID, --effort LEVEL, --fast, --standard, --dry-run, --explain
 No task text or Codex output is stored in local metrics.
@@ -579,6 +598,122 @@ def _update() -> int:
     return 0
 
 
+def _hooks_command(argv: Sequence[str], env: dict[str, str]) -> int:
+    parser = argparse.ArgumentParser(prog="cx hooks")
+    parser.add_argument("action", nargs="?", choices=("status", "install", "uninstall"), default="status")
+    args = parser.parse_args(list(argv))
+    config_path = codex_config_path(env)
+    if args.action == "status":
+        print(f"Codex config: {config_path}")
+        print(f"Per-turn routing hook: {'installed' if prompt_hook_installed(config_path) else 'not installed'}")
+        return 0
+    if args.action == "install":
+        executable = shutil.which("cx")
+        if not executable:
+            candidate = Path(sys.argv[0]).expanduser()
+            if candidate.is_file():
+                executable = str(candidate.resolve())
+        if not executable:
+            raise RuntimeError("cx is not available on PATH; install the CLI before installing its Codex hook")
+        installed, backup = install_prompt_hook(
+            config_path,
+            shlex.join((str(Path(executable).resolve()), "hook-submit")),
+        )
+        print(f"TUI prompt routing hook {'installed' if installed else 'already installed'}.")
+        if backup:
+            print(f"Codex config backup: {backup}")
+        if installed:
+            print("Open a new Codex session, then use /hooks to review and trust the local command hook.")
+        return 0
+    removed, backup = remove_prompt_hook(config_path)
+    print(f"TUI prompt routing hook {'removed' if removed else 'not installed'}.")
+    if backup:
+        print(f"Codex config backup: {backup}")
+    if removed:
+        print("Restart Codex sessions to unload the hook.")
+    return 0
+
+
+def _hook_submit(env: dict[str, str]) -> int:
+    try:
+        payload = sys.stdin.read(1_000_001)
+        if len(payload) > 1_000_000:
+            raise ValueError("Codex hook input exceeds the 1 MB safety limit")
+        event = json.loads(payload)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(json.dumps({"systemMessage": f"cx could not read this prompt event ({exc}); allowing it to continue."}))
+        return 0
+
+    state_dir = state_directory(env)
+    try:
+        codex_bin = _codex_bin(env)
+    except RuntimeError as exc:
+        print(json.dumps({"systemMessage": f"cx is unavailable ({exc}); allowing the prompt to continue."}))
+        return 0
+
+    def route_for_task(task: str) -> RoutingDecision:
+        check_chatgpt_auth(codex_bin, env)
+        config = effective_config(load_config(_paths(env)[0]))
+        registry, _ = read_registry(state_dir / "registry.json")
+        if not registry:
+            raise RuntimeError("no cached model registry; run `cx models refresh` before using TUI routing")
+        return route_task(task, config, registry)
+
+    def queue(command: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=50,
+            env=safe_environment(env),
+            check=False,
+        )
+
+    outcome = handle_prompt_submit(
+        event,
+        state_dir=state_dir,
+        route_for_task=route_for_task,
+        queue=queue,
+        codex_bin=codex_bin,
+    )
+    if outcome.decision:
+        decision = outcome.decision
+        try:
+            append_event(
+                state_dir / "runs.jsonl",
+                {
+                    "run_id": new_run_id(),
+                    "timestamp": utc_now(),
+                    "metric_source": "user_prompt_submit_hook",
+                    "task_category": "read_only" if decision.signals.read_only else "coding_or_reasoning",
+                    "mode": decision.mode,
+                    "model_id": decision.model_id,
+                    "effort": decision.effort,
+                    "service_tier_requested": decision.service_tier,
+                    "actual_service_tier": None,
+                    "duration_seconds": None,
+                    "queue_request_duration_seconds": outcome.duration_seconds,
+                    "codex_exit_code": None,
+                    "usage": None,
+                    "worker_model_requested": decision.worker_model_id,
+                    "worker_count_limit": decision.max_workers if decision.multi_agent else 0,
+                    "worker_count_observed": None,
+                    "task_outcome": "unknown",
+                    "verification_result": "unknown",
+                    "request_status": outcome.status,
+                    "retry_count": 0,
+                    "escalation_count": 0,
+                    "manual_override": False,
+                    "routing_confidence": decision.confidence,
+                },
+            )
+        except OSError as exc:
+            print(f"cx: could not record local routing metrics: {exc}", file=sys.stderr)
+    if outcome.response is not None:
+        print(json.dumps(outcome.response, separators=(",", ":")))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     values = list(sys.argv[1:] if argv is None else argv)
     env = dict(os.environ)
@@ -607,6 +742,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _feedback(rest, env)
         if command == "update":
             return _update()
+        if command == "hooks":
+            return _hooks_command(rest, env)
+        if command == "hook-submit":
+            if rest:
+                raise ValueError("cx hook-submit does not take arguments")
+            return _hook_submit(env)
         args = parse_run_args(values)
         return _run_task(args, env)
     except (ValueError, RuntimeError, KeyError, PermissionError, OSError) as exc:

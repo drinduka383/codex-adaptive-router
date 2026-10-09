@@ -1,6 +1,6 @@
 # Codex Adaptive Router
 
-`cx` chooses a Codex CLI model and execution mode before opening a fresh Codex session. It uses local task heuristics and the model capabilities exposed by the installed Codex CLI. It does not send task text to a classification service or require an API key.
+`cx` chooses a Codex CLI model and execution mode before opening a fresh Codex session. It can also route each prompt inside an existing Codex TUI session through an optional user prompt hook. It uses local task heuristics and the model capabilities exposed by the installed Codex CLI. It does not send task text to a classification service or require an API key.
 
 The goal is to complete more verified work per unit of Codex allowance while controlling latency and coordination overhead. The included thresholds are starting hypotheses; they are not measured guarantees.
 
@@ -56,6 +56,18 @@ cx --standard "use the standard service tier for this task"
 
 Each command starts a **new interactive Codex session** in the current working directory. It does not attach to or continue another Codex conversation. Luna and Sol are default model preferences in the JSON config, not identifiers embedded in the routing algorithm.
 
+### Route prompts in an existing Codex TUI
+
+To use automatic routing from a regular `codex` session, install the local prompt hook once:
+
+```sh
+cx hooks install
+```
+
+Start a new session and review/trust the hook with `/hooks`. Each submitted prompt is classified locally; `cx` queues the same prompt on the **same conversation** with its selected model, effort, and tier, then blocks the duplicate original submission. A visible `systemMessage` reports the selected route. `cx hooks status` checks installation, and `cx hooks uninstall` disables the hook for future sessions. Existing Codex sessions must be restarted to load or unload the config change.
+
+This uses the installed CLI's `codex queue --thread ... --model ...` interface. The route notice names the selected model. The Codex app-server schema says a turn model override applies to that and subsequent turns, but the TUI footer update is still runtime-dependent and must be checked on first activation. If routing or queuing fails, the hook allows the original prompt to proceed on the current model. The same task text is not written to router metrics; a short-lived SHA-256 prompt hash is used only to avoid rerouting the queued handoff.
+
 `--mode direct` means choose a single agent from the task signals and never enable subagents. `--mode luna` and `--mode sol` force the corresponding direct role. `--mode orchestrated` enables the multi-agent feature version advertised by the coordinator model; the coordinator still decides whether actual delegation is useful.
 
 ## Management commands
@@ -110,7 +122,7 @@ An exit code of zero is not treated as a verified task success. After reviewing 
 
 ## Plugin
 
-The repository root contains a skills-only plugin manifest and a `codex-adaptive-router` management skill. Codex CLI supports local plugin marketplaces; to test this plugin from a checkout:
+The repository root contains a plugin manifest and a `codex-adaptive-router` management skill. The skill explains and manages the standalone CLI; the per-turn hook is installed separately into the user's Codex config because the installed CLI does not support plugin hooks. Codex CLI supports local plugin marketplaces; to test this plugin from a checkout:
 
 ```sh
 codex plugin marketplace add /path/to/codex-adaptive-router
@@ -138,6 +150,7 @@ See [architecture](docs/architecture.md), [routing](docs/routing.md), [configura
 - Designed for Codex CLI 0.162.0 and later, Python 3.11+, Linux/macOS shells, and ChatGPT CLI authentication. Other CLI versions must pass `cx doctor` and the bundled model-catalog probe.
 - The installed catalog is a capability snapshot, not an account entitlement API.
 - Native child model/effort assignments, actual child count, and child Fast are not confirmed by this wrapper.
+- The hook requires a one-time `/hooks` review/trust and a new session after installation. It depends on the installed CLI's `codex queue` support. A live model-indicator update is not yet verified on Codex CLI 0.162.0; the attempted disposable TUI probe stopped at Codex's project trust screen.
 - Automatic verification and escalation across interactive sessions are intentionally absent.
 - Heuristic thresholds are configurable but have not been calibrated on a task-success dataset.
 - Accurate subscription quota per successfully completed task requires Codex to expose usage for interactive sessions and verified outcomes to be recorded.
