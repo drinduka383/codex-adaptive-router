@@ -20,7 +20,19 @@ The project needs Python 3.11+ and a Codex CLI whose `codex debug models --bundl
 
 ## Plugin
 
-The root `plugin.json` packages the management skill. To load it from a local checkout, use the local marketplace commands in the README. This changes Codex plugin configuration and is optional; `cx` itself does not require plugin activation.
+The root `plugin.json` packages the management skill. From the checkout root, load and install it with:
+
+```sh
+codex plugin marketplace add ./.agents/plugins
+codex plugin add codex-adaptive-router --marketplace codex-adaptive-router-local
+```
+
+This changes Codex plugin configuration and is optional; `cx` itself does not require plugin activation. Remove it with:
+
+```sh
+codex plugin remove codex-adaptive-router --marketplace codex-adaptive-router-local
+codex plugin marketplace remove codex-adaptive-router-local
+```
 
 ## Update
 
