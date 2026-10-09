@@ -110,7 +110,7 @@ class HookTests(unittest.TestCase):
     def test_hook_install_is_idempotent_and_remove_preserves_existing_config(self):
         with tempfile.TemporaryDirectory() as directory:
             config = Path(directory) / "config.toml"
-            original = '[features]\nfast_mode = true\n\n[hooks]\n'
+            original = "[features]\nfast_mode = true\n\n[hooks]\n"
             config.write_text(original, encoding="utf-8")
 
             installed_now, _ = install_prompt_hook(config, "/tmp/cx hook-submit")

@@ -69,7 +69,7 @@ class CliTests(unittest.TestCase):
             codex_home = root / "codex"
             codex_home.mkdir()
             config = codex_home / "config.toml"
-            original = '[features]\nfast_mode = true\n\n[hooks]\n'
+            original = "[features]\nfast_mode = true\n\n[hooks]\n"
             config.write_text(original, encoding="utf-8")
             output = io.StringIO()
             with (
