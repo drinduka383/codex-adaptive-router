@@ -1,0 +1,7 @@
+[
+  {
+    "id": "parallel-arithmetic-smoke",
+    "prompt": "This is a deliberate orchestration check. Use exactly one worker with the requested worker settings to independently compute 8 minus 3. You compute 3 plus 4 yourself. Do not create more agents. Return exactly this JSON shape with the correct values: {\"sum\":7,\"difference\":5}.",
+    "expected_regex": "\\\"sum\\\":7,\\\"difference\\\":5"
+  }
+]

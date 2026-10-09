@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.ruff_cache/
+.pytest_cache/
+build/
+dist/
+.coverage
+coverage.xml
+*.log
+.env
+.env.*
+!.env.example
+codex-router-state/

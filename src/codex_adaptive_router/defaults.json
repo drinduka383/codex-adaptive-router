@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "preset": "balanced",
+  "models": {
+    "roles": {
+      "efficient": ["gpt-6-luna"],
+      "capable": ["gpt-6.1-sol"],
+      "worker": ["gpt-6-luna"]
+    },
+    "fallback_order": ["gpt-6-luna", "gpt-6.1-sol"]
+  },
+  "routing": {
+    "confidence_min": 0.42,
+    "strong_model_difficulty": 0.48,
+    "strong_model_risk": 0.60,
+    "orchestration_scope": 0.62,
+    "orchestration_parallelism": 0.62,
+    "coordination_overhead_max": 0.48,
+    "max_workers": 2,
+    "max_retries": 0,
+    "max_escalations": 0,
+    "max_task_chars": 20000
+  },
+  "efforts": {
+    "luna_inspection": "low",
+    "luna_mechanical": "high",
+    "luna_general": "medium",
+    "sol_low": "low",
+    "sol_medium": "medium",
+    "sol_high": "high",
+    "sol_very_high": "xhigh",
+    "orchestrator": "medium",
+    "worker": "low"
+  },
+  "service_tier": {
+    "fast_mode": "auto",
+    "fast_risk_max": 0.55,
+    "urgent_sensitivity": 0.75
+  },
+  "discovery": {
+    "refresh_hours": 24,
+    "stale_days": 30,
+    "max_catalog_bytes": 5000000
+  },
+  "evaluation": {
+    "max_cases": 2,
+    "max_models": 2,
+    "timeout_seconds": 120
+  },
+  "presets": {
+    "balanced": {},
+    "economical": {"service_tier": {"fast_mode": "never"}},
+    "fast": {"service_tier": {"fast_mode": "always"}},
+    "quality": {"routing": {"strong_model_difficulty": 0.35}}
+  }
+}

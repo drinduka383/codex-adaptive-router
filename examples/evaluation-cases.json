@@ -1,0 +1,7 @@
+[
+  {
+    "id": "literal-response-smoke",
+    "prompt": "Return exactly CX_EVAL_OK and nothing else.",
+    "expected_regex": "^CX_EVAL_OK$"
+  }
+]

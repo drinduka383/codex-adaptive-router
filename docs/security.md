@@ -1,0 +1,11 @@
+# Security and privacy
+
+- Routing classification is local and deterministic; no model or external classifier receives task text.
+- Codex subprocesses inherit the existing ChatGPT login. `cx` removes `OPENAI_API_KEY` and `OPENAI_BASE_URL` before launching Codex and refuses to run if `codex login status` does not report ChatGPT authentication.
+- Router config, registry, config history, and metrics use user-only file permissions. They contain model IDs and routing outcomes, not credentials.
+- Prompts, source files, and model output are not written to router logs. Evaluation response files are temporary and removed after each case.
+- Evaluation requires `--confirm-usage`, uses ephemeral sessions and a read-only sandbox, caps models/cases, and has a timeout.
+- Subprocesses use an argument array. User task text is one argument, never shell source.
+- The wrapper does not change Codex model defaults, hooks, custom agents, skills, plugins, or marketplaces.
+- Orchestrated children share the working tree. The coordinator is instructed to use read-only tasks or disjoint file ownership, but that is not a filesystem-enforced boundary.
+- GitHub Actions runs only tests and packaging. It requires no Codex credentials and does not perform model evaluations.
