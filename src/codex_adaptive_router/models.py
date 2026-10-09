@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any
 
-
 LIFECYCLE_STATES = {"discovered", "untested", "evaluated", "approved", "disabled", "deprecated"}
 
 

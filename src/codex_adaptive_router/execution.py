@@ -32,8 +32,7 @@ def check_chatgpt_auth(codex_bin: str = "codex", env: Mapping[str, str] | None =
     status = (result.stdout + "\n" + result.stderr).lower()
     if result.returncode != 0 or "logged in using chatgpt" not in status:
         raise RuntimeError(
-            "Codex is not using ChatGPT authentication; sign in with `codex login`. "
-            "cx will not use API-key billing."
+            "Codex is not using ChatGPT authentication; sign in with `codex login`. cx will not use API-key billing."
         )
 
 

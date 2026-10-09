@@ -55,12 +55,14 @@ class ExecutionTests(unittest.TestCase):
         self.assertNotIn("multi_agent_v2", command)
 
     def test_environment_drops_api_routing_overrides_but_preserves_codex_home(self):
-        env = safe_environment({
-            "OPENAI_API_KEY": "must-not-pass",
-            "OPENAI_BASE_URL": "https://custom.invalid",
-            "CODEX_HOME": "/tmp/codex-home",
-            "PATH": "/bin",
-        })
+        env = safe_environment(
+            {
+                "OPENAI_API_KEY": "must-not-pass",
+                "OPENAI_BASE_URL": "https://custom.invalid",
+                "CODEX_HOME": "/tmp/codex-home",
+                "PATH": "/bin",
+            }
+        )
         self.assertNotIn("OPENAI_API_KEY", env)
         self.assertNotIn("OPENAI_BASE_URL", env)
         self.assertEqual(env["CODEX_HOME"], "/tmp/codex-home")
@@ -70,12 +72,15 @@ class ExecutionTests(unittest.TestCase):
             '{"type":"turn.completed","usage":{"input_tokens":7,"cached_input_tokens":3,'
             '"output_tokens":2,"reasoning_tokens":1}}\n'
         )
-        self.assertEqual(parse_usage_events(raw), {
-            "input_tokens": 7,
-            "cached_input_tokens": 3,
-            "output_tokens": 2,
-            "reasoning_tokens": 1,
-        })
+        self.assertEqual(
+            parse_usage_events(raw),
+            {
+                "input_tokens": 7,
+                "cached_input_tokens": 3,
+                "output_tokens": 2,
+                "reasoning_tokens": 1,
+            },
+        )
 
 
 if __name__ == "__main__":

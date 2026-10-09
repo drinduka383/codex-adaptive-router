@@ -38,8 +38,13 @@ class EvaluationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             case = {"id": "split", "prompt": "Inspect two files independently", "expected_regex": "READY"}
             command = build_evaluation_command(
-                model("root-model"), "medium", case, Path(temp) / "out.txt",
-                mode="orchestrated", worker_model_id="worker-model", worker_effort="low",
+                model("root-model"),
+                "medium",
+                case,
+                Path(temp) / "out.txt",
+                mode="orchestrated",
+                worker_model_id="worker-model",
+                worker_effort="low",
             )
         self.assertIn(("--enable", "multi_agent_v2"), list(zip(command, command[1:])))
         self.assertIn("Use no more than one worker total", command[-1])
@@ -50,16 +55,20 @@ class EvaluationTests(unittest.TestCase):
     def test_fast_evaluation_is_separate_from_effort(self):
         with tempfile.TemporaryDirectory() as temp:
             command = build_evaluation_command(
-                model("model-a"), "max", {"id": "fast", "prompt": "Return READY", "expected_regex": "READY"},
-                Path(temp) / "out.txt", service_tier="fast",
+                model("model-a"),
+                "max",
+                {"id": "fast", "prompt": "Return READY", "expected_regex": "READY"},
+                Path(temp) / "out.txt",
+                service_tier="fast",
             )
         self.assertIn("model_reasoning_effort=max", command)
         self.assertIn("service_tier=fast", command)
 
     def test_process_failure_is_classified_without_persisting_stderr(self):
         completed = type("Completed", (), {"returncode": 1, "stdout": "", "stderr": "private diagnostic"})()
-        with patch("codex_adaptive_router.evaluation.check_chatgpt_auth"), patch(
-            "codex_adaptive_router.evaluation.subprocess.run", return_value=completed
+        with (
+            patch("codex_adaptive_router.evaluation.check_chatgpt_auth"),
+            patch("codex_adaptive_router.evaluation.subprocess.run", return_value=completed),
         ):
             results = run_evaluation(
                 [model("model-a")],

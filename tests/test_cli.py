@@ -1,7 +1,6 @@
 import contextlib
 import io
 import json
-import tempfile
 import unittest
 from importlib.resources import files
 from unittest.mock import patch
@@ -44,19 +43,17 @@ class CliTests(unittest.TestCase):
             lifecycle="approved",
             account_availability="observed_available",
         )
-        with tempfile.TemporaryDirectory() as temp:
-            env = {"XDG_CONFIG_HOME": temp, "XDG_STATE_HOME": temp}
-            output = io.StringIO()
-            with (
-                patch("codex_adaptive_router.cli._codex_bin", return_value="codex-test"),
-                patch(
-                    "codex_adaptive_router.cli._load_registry",
-                    return_value=({"test-model": model}, {"catalog_hash": "abc"}),
-                ),
-                patch("codex_adaptive_router.cli.run_interactive") as run,
-                contextlib.redirect_stdout(output),
-            ):
-                code = main(["--dry-run", "--mode", "luna", "--model", "test-model", "inspect", "a", "file"])
+        output = io.StringIO()
+        with (
+            patch("codex_adaptive_router.cli._codex_bin", return_value="codex-test"),
+            patch(
+                "codex_adaptive_router.cli._load_registry",
+                return_value=({"test-model": model}, {"catalog_hash": "abc"}),
+            ),
+            patch("codex_adaptive_router.cli.run_interactive") as run,
+            contextlib.redirect_stdout(output),
+        ):
+            code = main(["--dry-run", "--mode", "luna", "--model", "test-model", "inspect", "a", "file"])
         self.assertEqual(code, 0)
         self.assertIn("Luna Direct", output.getvalue())
         self.assertIn("test-model", output.getvalue())

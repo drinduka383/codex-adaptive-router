@@ -66,8 +66,7 @@ def build_evaluation_command(
 ) -> list[str]:
     prompt = (
         "This is an opt-in, read-only router evaluation. Do not edit files, run commands that modify state, or access "
-        "external services. Follow this task and return only the requested result:\n\n"
-        + case["prompt"]
+        "external services. Follow this task and return only the requested result:\n\n" + case["prompt"]
     )
     if mode not in {"direct", "orchestrated"}:
         raise ValueError("evaluation mode must be direct or orchestrated")
@@ -86,8 +85,7 @@ def build_evaluation_command(
             "or access external services. "
             "Use no more than one worker total and do not create grandchildren. Delegate one independent part only if "
             f"useful; request worker model {worker_model_id} with reasoning_effort {worker_effort}.{fork_guidance} "
-            "Root owns integration and checks the expected result.\n\n"
-            + prompt
+            "Root owns integration and checks the expected result.\n\n" + prompt
         )
     command = [
         codex_bin,
@@ -186,47 +184,53 @@ def run_evaluation(
                         if not matched
                         else "expected_regex_passed"
                     )
-                    results.append({
-                        "case_id": case["id"],
-                        "model_id": model.model_id,
-                        "execution_mode": mode,
-                        "worker_model_requested": (
-                            worker_model.model_id if worker_model and mode == "orchestrated" else None
-                        ),
-                        "worker_effort_requested": worker_effort if mode == "orchestrated" else None,
-                        "worker_count_observed": None,
-                        "effort": selected_effort,
-                        "service_tier_requested": service_tier,
-                        "duration_seconds": elapsed,
-                        "process_exit_code": process.returncode,
-                        "passed": matched,
-                        "usage": usage,
-                        "verification": verification,
-                    })
+                    results.append(
+                        {
+                            "case_id": case["id"],
+                            "model_id": model.model_id,
+                            "execution_mode": mode,
+                            "worker_model_requested": (
+                                worker_model.model_id if worker_model and mode == "orchestrated" else None
+                            ),
+                            "worker_effort_requested": worker_effort if mode == "orchestrated" else None,
+                            "worker_count_observed": None,
+                            "effort": selected_effort,
+                            "service_tier_requested": service_tier,
+                            "duration_seconds": elapsed,
+                            "process_exit_code": process.returncode,
+                            "passed": matched,
+                            "usage": usage,
+                            "verification": verification,
+                        }
+                    )
                 except subprocess.TimeoutExpired:
                     model_available = False
                     model_passed = False
-                    results.append({
-                        "case_id": case["id"],
-                        "model_id": model.model_id,
-                        "execution_mode": mode,
-                        "worker_model_requested": (
-                            worker_model.model_id if worker_model and mode == "orchestrated" else None
-                        ),
-                        "worker_effort_requested": worker_effort if mode == "orchestrated" else None,
-                        "worker_count_observed": None,
-                        "effort": selected_effort,
-                        "service_tier_requested": service_tier,
-                        "duration_seconds": float(timeout),
-                        "process_exit_code": None,
-                        "passed": False,
-                        "usage": None,
-                        "verification": "timed_out",
-                    })
-        results.append({
-            "event": "model_evaluation_summary",
-            "model_id": model.model_id,
-            "passed": model_passed,
-            "account_available": model_available,
-        })
+                    results.append(
+                        {
+                            "case_id": case["id"],
+                            "model_id": model.model_id,
+                            "execution_mode": mode,
+                            "worker_model_requested": (
+                                worker_model.model_id if worker_model and mode == "orchestrated" else None
+                            ),
+                            "worker_effort_requested": worker_effort if mode == "orchestrated" else None,
+                            "worker_count_observed": None,
+                            "effort": selected_effort,
+                            "service_tier_requested": service_tier,
+                            "duration_seconds": float(timeout),
+                            "process_exit_code": None,
+                            "passed": False,
+                            "usage": None,
+                            "verification": "timed_out",
+                        }
+                    )
+        results.append(
+            {
+                "event": "model_evaluation_summary",
+                "model_id": model.model_id,
+                "passed": model_passed,
+                "account_available": model_available,
+            }
+        )
     return results

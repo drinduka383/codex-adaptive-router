@@ -4,11 +4,22 @@ import re
 
 from .models import TaskSignals
 
-
 _RISK = (
-    "security", "authentication", "authorization", "credential", "permission",
-    "race condition", "concurrency", "concurrent", "data loss", "data integrity",
-    "database migration", "migration", "billing", "delete", "production",
+    "security",
+    "authentication",
+    "authorization",
+    "credential",
+    "permission",
+    "race condition",
+    "concurrency",
+    "concurrent",
+    "data loss",
+    "data integrity",
+    "database migration",
+    "migration",
+    "billing",
+    "delete",
+    "production",
 )
 _DEBUG = ("debug", "bug", "broken", "doesn't work", "not working", "root cause", "investigate", "intermittent")
 _ARCHITECTURE = ("architecture", "architect", "redesign", "cross-cutting", "system design", "deep refactor")

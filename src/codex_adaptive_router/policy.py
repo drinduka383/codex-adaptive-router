@@ -4,7 +4,6 @@ from .classifier import classify_task
 from .config import effective_config, validate_config
 from .models import ModelCapability, RoutingDecision, TaskSignals
 
-
 _EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 
@@ -228,11 +227,7 @@ def route_task(
     if service_tier == "fast":
         reasons.append("latency preference requests Fast; it affects speed and allowance use")
     manual = bool(
-        mode_override not in (None, "auto")
-        or model_override
-        or effort_override
-        or fast_override
-        or standard_override
+        mode_override not in (None, "auto") or model_override or effort_override or fast_override or standard_override
     )
     return RoutingDecision(
         mode=mode,

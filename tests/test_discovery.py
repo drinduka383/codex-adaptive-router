@@ -8,7 +8,6 @@ from codex_adaptive_router.discovery import (
     sync_registry,
 )
 
-
 CATALOG = json.dumps(
     {
         "models": [

@@ -89,14 +89,16 @@ def sync_registry(
             first_seen = old.first_seen_at or now
             verified = old.last_verified_at
             evidence = old.evidence
-            changed = any((
-                old.display_name != discovered.display_name,
-                old.reasoning_efforts != discovered.reasoning_efforts,
-                old.service_tiers != discovered.service_tiers,
-                old.multi_agent_version != discovered.multi_agent_version,
-                old.default_effort != discovered.default_effort,
-                old.catalog_service_tiers != discovered.catalog_service_tiers,
-            ))
+            changed = any(
+                (
+                    old.display_name != discovered.display_name,
+                    old.reasoning_efforts != discovered.reasoning_efforts,
+                    old.service_tiers != discovered.service_tiers,
+                    old.multi_agent_version != discovered.multi_agent_version,
+                    old.default_effort != discovered.default_effort,
+                    old.catalog_service_tiers != discovered.catalog_service_tiers,
+                )
+            )
             if changed:
                 evidence += ("catalog capabilities changed; prior evaluation must be repeated",)
                 if state != "disabled":
@@ -146,17 +148,19 @@ def mark_evaluated(
         raise KeyError(f"model is not in the discovered catalog: {model_id}")
     result = dict(registry)
     model = result[model_id]
-    result[model_id] = ModelCapability.from_dict({
-        **model.to_dict(),
-        "lifecycle": "evaluated" if model.lifecycle != "approved" else "approved",
-        "account_availability": (
-            "observed_available" if (success if available is None else available) else "observed_unavailable"
-        ),
-        "evaluation_passed": success,
-        "last_verified_at": verified_at,
-        "evidence": list(model.evidence)
-        + (["opt-in read-only Codex evaluation passed"] if success else ["opt-in Codex evaluation failed"]),
-    })
+    result[model_id] = ModelCapability.from_dict(
+        {
+            **model.to_dict(),
+            "lifecycle": "evaluated" if model.lifecycle != "approved" else "approved",
+            "account_availability": (
+                "observed_available" if (success if available is None else available) else "observed_unavailable"
+            ),
+            "evaluation_passed": success,
+            "last_verified_at": verified_at,
+            "evidence": list(model.evidence)
+            + (["opt-in read-only Codex evaluation passed"] if success else ["opt-in Codex evaluation failed"]),
+        }
+    )
     return result
 
 

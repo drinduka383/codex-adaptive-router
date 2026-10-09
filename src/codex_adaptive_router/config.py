@@ -9,7 +9,6 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
-
 _DEFAULT_CONFIG: dict[str, Any] = json.loads(
     files("codex_adaptive_router").joinpath("defaults.json").read_text(encoding="utf-8")
 )
@@ -53,9 +52,7 @@ def _validate_config_shape(value: dict[str, Any]) -> None:
         if not isinstance(item, dict):
             raise ValueError("presets must be an object")
         override_schema = {
-            name: schema
-            for name, schema in _DEFAULT_CONFIG.items()
-            if name not in {"version", "preset", "presets"}
+            name: schema for name, schema in _DEFAULT_CONFIG.items() if name not in {"version", "preset", "presets"}
         }
         for preset_name, overrides in item.items():
             if not isinstance(overrides, dict):

@@ -13,7 +13,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from . import __version__
-from .config import ConfigStore, default_config, effective_config, load_config, set_config_value
+from .config import ConfigStore, effective_config, load_config, set_config_value
 from .discovery import (
     approve_model,
     discover_bundled_catalog,
@@ -28,7 +28,6 @@ from .execution import build_interactive_command, check_chatgpt_auth, run_intera
 from .metrics import append_event, config_directory, new_run_id, read_events, state_directory, update_feedback, utc_now
 from .models import ModelCapability, RoutingDecision
 from .policy import route_task
-
 
 MANAGEMENT_COMMANDS = {"models", "config", "doctor", "explain", "evaluate", "status", "feedback", "update"}
 HELP = """cx — local, model-agnostic Codex CLI routing
@@ -116,11 +115,7 @@ def _load_registry(
     registry, metadata = read_registry(path)
     discovered = _metadata_time(metadata.get("discovered_at"))
     refresh_hours = config["discovery"]["refresh_hours"]
-    due = (
-        force_refresh
-        or discovered is None
-        or datetime.now(UTC) - discovered >= timedelta(hours=refresh_hours)
-    )
+    due = force_refresh or discovered is None or datetime.now(UTC) - discovered >= timedelta(hours=refresh_hours)
     if due:
         try:
             catalog, raw = discover_bundled_catalog(codex_bin)
@@ -164,11 +159,13 @@ def render_decision(decision: RoutingDecision) -> str:
         f"Confidence: {decision.confidence:.0%} (heuristic, not a success probability)",
     ]
     if decision.multi_agent:
-        lines.extend((
-            f"Workers: up to {decision.max_workers}",
-            f"Preferred worker: {decision.worker_model_id} / {decision.worker_effort} "
-            "(requested; runtime may not confirm)",
-        ))
+        lines.extend(
+            (
+                f"Workers: up to {decision.max_workers}",
+                f"Preferred worker: {decision.worker_model_id} / {decision.worker_effort} "
+                "(requested; runtime may not confirm)",
+            )
+        )
     lines.extend((f"Reason: {decision.reason}", "Signals:"))
     for name, value in (
         ("difficulty", decision.signals.difficulty),
@@ -210,51 +207,57 @@ def _run_task(args: argparse.Namespace, env: dict[str, str] | None = None) -> in
     try:
         exit_code, elapsed = run_interactive(command, codex_bin=codex_bin, env=env)
     except RuntimeError as exc:
-        append_event(state_dir / "runs.jsonl", {
+        append_event(
+            state_dir / "runs.jsonl",
+            {
+                "run_id": run_id,
+                "timestamp": utc_now(),
+                "task_category": "router_or_auth_error",
+                "mode": decision.mode,
+                "model_id": decision.model_id,
+                "effort": decision.effort,
+                "service_tier_requested": decision.service_tier,
+                "actual_service_tier": None,
+                "duration_seconds": 0,
+                "codex_exit_code": None,
+                "usage": None,
+                "worker_count_observed": None,
+                "task_outcome": "unknown",
+                "verification_result": "unknown",
+                "retry_count": 0,
+                "escalation_count": 0,
+                "error_category": "authentication_or_launch",
+            },
+        )
+        print(f"cx: {exc}", file=sys.stderr)
+        return 2
+
+    append_event(
+        state_dir / "runs.jsonl",
+        {
             "run_id": run_id,
             "timestamp": utc_now(),
-            "task_category": "router_or_auth_error",
+            "task_category": "read_only" if decision.signals.read_only else "coding_or_reasoning",
             "mode": decision.mode,
             "model_id": decision.model_id,
             "effort": decision.effort,
             "service_tier_requested": decision.service_tier,
             "actual_service_tier": None,
-            "duration_seconds": 0,
-            "codex_exit_code": None,
+            "duration_seconds": elapsed,
+            "codex_exit_code": exit_code,
             "usage": None,
+            "worker_model_requested": decision.worker_model_id,
+            "worker_count_limit": decision.max_workers if decision.multi_agent else 0,
             "worker_count_observed": None,
             "task_outcome": "unknown",
             "verification_result": "unknown",
             "retry_count": 0,
             "escalation_count": 0,
-            "error_category": "authentication_or_launch",
-        })
-        print(f"cx: {exc}", file=sys.stderr)
-        return 2
-
-    append_event(state_dir / "runs.jsonl", {
-        "run_id": run_id,
-        "timestamp": utc_now(),
-        "task_category": "read_only" if decision.signals.read_only else "coding_or_reasoning",
-        "mode": decision.mode,
-        "model_id": decision.model_id,
-        "effort": decision.effort,
-        "service_tier_requested": decision.service_tier,
-        "actual_service_tier": None,
-        "duration_seconds": elapsed,
-        "codex_exit_code": exit_code,
-        "usage": None,
-        "worker_model_requested": decision.worker_model_id,
-        "worker_count_limit": decision.max_workers if decision.multi_agent else 0,
-        "worker_count_observed": None,
-        "task_outcome": "unknown",
-        "verification_result": "unknown",
-        "retry_count": 0,
-        "escalation_count": 0,
-        "manual_override": decision.manual_override,
-        "routing_confidence": decision.confidence,
-        "discovery_hash": metadata.get("catalog_hash"),
-    })
+            "manual_override": decision.manual_override,
+            "routing_confidence": decision.confidence,
+            "discovery_hash": metadata.get("catalog_hash"),
+        },
+    )
     print(f"\nRun {run_id} returned exit code {exit_code}; task success remains unverified.", file=sys.stderr)
     print(f"After checking the result: cx feedback {run_id} success --verified", file=sys.stderr)
     return exit_code
@@ -355,9 +358,7 @@ def _doctor(env: dict[str, str] | None) -> int:
         configured = [model_id for ids in config["models"]["roles"].values() for model_id in ids]
         missing = [model_id for model_id in configured if model_id not in registry]
         unapproved = [
-            model_id
-            for model_id in configured
-            if model_id in registry and registry[model_id].lifecycle != "approved"
+            model_id for model_id in configured if model_id in registry and registry[model_id].lifecycle != "approved"
         ]
         print(f"Bundled model catalog: {len(registry)} models; discovered {metadata.get('discovered_at') or 'never'}")
         print(f"Catalog freshness: {_catalog_freshness(metadata, config)}")
@@ -378,8 +379,7 @@ def _doctor(env: dict[str, str] | None) -> int:
         v1 = feature_rows.get("multi_agent", "not listed")
         v2 = feature_rows.get("multi_agent_v2", "not listed")
         print(
-            f"Native multi-agent: v1 {v1}; v2 {v2}. "
-            "cx enables the catalogued version only for orchestrated sessions."
+            f"Native multi-agent: v1 {v1}; v2 {v2}. cx enables the catalogued version only for orchestrated sessions."
         )
     except (OSError, subprocess.SubprocessError):
         print("Native multi-agent: could not inspect")
@@ -393,8 +393,14 @@ def _explain(argv: Sequence[str], env: dict[str, str] | None) -> int:
     parser.add_argument("task", nargs="+")
     args = parser.parse_args(list(argv))
     run_args = argparse.Namespace(
-        task=" ".join(args.task), mode="auto", model=None, effort=None, fast=False, standard=False,
-        dry_run=True, explain=False,
+        task=" ".join(args.task),
+        mode="auto",
+        model=None,
+        effort=None,
+        fast=False,
+        standard=False,
+        dry_run=True,
+        explain=False,
     )
     return _run_task(run_args, env)
 
@@ -486,11 +492,14 @@ def _evaluate(argv: Sequence[str], env: dict[str, str] | None) -> int:
     for result in results:
         if result.get("event") == "model_evaluation_summary":
             continue
-        append_event(state_dir / "evaluations.jsonl", {
-            "timestamp": utc_now(),
-            "event": "evaluation_case",
-            **result,
-        })
+        append_event(
+            state_dir / "evaluations.jsonl",
+            {
+                "timestamp": utc_now(),
+                "event": "evaluation_case",
+                **result,
+            },
+        )
         print(
             f"{result['model_id']} / {result['case_id']}: {'PASS' if result['passed'] else 'FAIL'}; "
             f"mode={result['execution_mode']}; verification={result['verification']}; "
@@ -505,9 +514,7 @@ def _evaluate(argv: Sequence[str], env: dict[str, str] | None) -> int:
         )
     for model_id, summary in summaries.items():
         outcome = (
-            "evaluated; eligible for manual approval"
-            if summary["passed"]
-            else "evaluated; not eligible for approval"
+            "evaluated; eligible for manual approval" if summary["passed"] else "evaluated; not eligible for approval"
         )
         print(f"{model_id}: {outcome}")
     return 0 if summaries and all(row["passed"] for row in summaries.values()) else 1
