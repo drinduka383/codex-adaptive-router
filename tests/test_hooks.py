@@ -35,7 +35,9 @@ class HookTests(unittest.TestCase):
         task = "inspect this; do not run shell commands"
         command = build_queue_command(decision(), task, "thread-123", codex_bin="codex-test")
 
-        self.assertEqual(command[:4], ["codex-test", "queue", "--thread", "thread-123"])
+        self.assertEqual(command[:2], ["codex-test", "queue"])
+        self.assertEqual(command[command.index("--thread") + 1], "thread-123")
+        self.assertEqual(command[command.index("--remote") + 1], "unix://")
         self.assertEqual(command[command.index("--message") + 1], task)
         self.assertEqual(command[command.index("--model") + 1], "model-a")
         self.assertIn("model_reasoning_effort=low", command)

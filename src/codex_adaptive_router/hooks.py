@@ -50,6 +50,8 @@ def build_queue_command(
     command = [
         codex_bin,
         "queue",
+        "--remote",
+        "unix://",
         "--thread",
         thread_id,
         "--message",
