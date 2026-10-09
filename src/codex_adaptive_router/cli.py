@@ -609,7 +609,7 @@ def _hooks_command(argv: Sequence[str], env: dict[str, str]) -> int:
     hooks_path = codex_hooks_path(env)
     if args.action == "status":
         print(f"Codex hooks: {hooks_path}")
-        print(f"Per-turn routing hook: {'installed' if prompt_hook_installed(hooks_path) else 'not installed'}")
+        print(f"Explicit $cx TUI routing: {'enabled' if prompt_hook_installed(hooks_path) else 'disabled'}")
         if legacy_prompt_hook_installed(config_path):
             print("Legacy inline hook in config.toml; run `cx hooks install` to move it into hooks.json.")
         return 0
@@ -627,7 +627,7 @@ def _hooks_command(argv: Sequence[str], env: dict[str, str]) -> int:
         )
         legacy_removed, config_backup = remove_legacy_prompt_hook(config_path)
         changed = installed or legacy_removed
-        print(f"TUI prompt routing hook {'installed' if changed else 'already installed'}.")
+        print(f"Explicit $cx TUI routing {'enabled' if changed else 'already enabled'}.")
         if hooks_backup:
             print(f"Codex hooks backup: {hooks_backup}")
         if config_backup:
@@ -638,7 +638,7 @@ def _hooks_command(argv: Sequence[str], env: dict[str, str]) -> int:
     removed_json, hooks_backup = remove_prompt_hook(hooks_path)
     removed_legacy, config_backup = remove_legacy_prompt_hook(config_path)
     removed = removed_json or removed_legacy
-    print(f"TUI prompt routing hook {'removed' if removed else 'not installed'}.")
+    print(f"Explicit $cx TUI routing {'disabled' if removed else 'already disabled'}.")
     if hooks_backup:
         print(f"Codex hooks backup: {hooks_backup}")
     if config_backup:
@@ -659,11 +659,7 @@ def _hook_submit(env: dict[str, str]) -> int:
         return 0
 
     state_dir = state_directory(env)
-    try:
-        codex_bin = _codex_bin(env)
-    except RuntimeError as exc:
-        print(json.dumps({"systemMessage": f"cx is unavailable ({exc}); allowing the prompt to continue."}))
-        return 0
+    codex_bin = env.get("CX_CODEX_BIN") or shutil.which("codex", path=env.get("PATH")) or "codex"
 
     def route_for_task(task: str) -> RoutingDecision:
         check_chatgpt_auth(codex_bin, env)

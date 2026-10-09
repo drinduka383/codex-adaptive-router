@@ -19,8 +19,9 @@ from .models import RoutingDecision
 
 _BEGIN = "# BEGIN CODEX ADAPTIVE ROUTER (cx)"
 _END = "# END CODEX ADAPTIVE ROUTER (cx)"
-_CX_STATUS_MESSAGE = "cx is selecting a model for this turn"
-# shortcut: one hash-only handoff per session for 30s; use turn IDs if concurrent queued prompts are added.
+_CX_STATUS_MESSAGE = "cx is checking for an explicit $cx request"
+_OLD_CX_STATUS_MESSAGE = "cx is selecting a model for this turn"
+# shortcut: one pending handoff per session for 30s; use turn IDs if concurrent queued prompts are added.
 _HANDOFF_TTL_SECONDS = 30
 
 
@@ -106,28 +107,49 @@ def _write_private_json(path: Path, payload: dict[str, Any]) -> None:
             os.unlink(temporary)
 
 
-def mark_handoff(state_dir: Path, session_id: str, prompt: str, *, now: float | None = None) -> None:
+def mark_handoff(
+    state_dir: Path,
+    session_id: str,
+    prompt: str,
+    decision: RoutingDecision,
+    *,
+    now: float | None = None,
+) -> None:
     created = time.time() if now is None else now
     _write_private_json(
         _handoff_path(state_dir, session_id),
-        {"prompt_hash": _prompt_hash(prompt), "expires_at": created + _HANDOFF_TTL_SECONDS},
+        {
+            "prompt_hash": _prompt_hash(prompt),
+            "expires_at": created + _HANDOFF_TTL_SECONDS,
+            "model_id": decision.model_id,
+            "effort": decision.effort,
+            "service_tier": decision.service_tier,
+        },
     )
 
 
-def consume_handoff(state_dir: Path, session_id: str, prompt: str, *, now: float | None = None) -> bool:
+def consume_handoff(
+    state_dir: Path,
+    session_id: str,
+    prompt: str,
+    *,
+    now: float | None = None,
+) -> dict[str, Any] | None:
     path = _handoff_path(state_dir, session_id)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return False
+        return None
+    if not isinstance(payload, dict):
+        return None
     current = time.time() if now is None else now
     if payload.get("expires_at", 0) < current:
         path.unlink(missing_ok=True)
-        return False
+        return None
     if payload.get("prompt_hash") != _prompt_hash(prompt):
-        return False
+        return None
     path.unlink(missing_ok=True)
-    return True
+    return payload
 
 
 def clear_handoff(state_dir: Path, session_id: str) -> None:
@@ -136,6 +158,15 @@ def clear_handoff(state_dir: Path, session_id: str) -> None:
 
 def _queue_returncode(result: Any) -> int:
     return result.returncode if hasattr(result, "returncode") else int(result)
+
+
+def _cx_task(prompt: str) -> str | None:
+    text = prompt.lstrip()
+    if text == "$cx":
+        return ""
+    if text.startswith("$cx") and len(text) > 3 and text[3].isspace():
+        return text[3:].strip()
+    return None
 
 
 def handle_prompt_submit(
@@ -152,29 +183,78 @@ def handle_prompt_submit(
     prompt = event.get("prompt")
     if not isinstance(session_id, str) or not session_id or not isinstance(prompt, str) or not prompt.strip():
         return HookOutcome(None, None, "ignored")
-    if consume_handoff(state_dir, session_id, prompt):
-        return HookOutcome(None, None, "handoff")
+    handoff = consume_handoff(state_dir, session_id, prompt)
+    if handoff is not None:
+        expected_model = handoff.get("model_id")
+        reported_model = event.get("model")
+        effort = handoff.get("effort", "unknown")
+        tier = {"fast": "Fast", "default": "Standard"}.get(
+            handoff.get("service_tier"), "Codex default"
+        )
+        if isinstance(reported_model, str) and reported_model:
+            if reported_model == expected_model:
+                message = (
+                    f"cx confirmed active model {reported_model}; requested effort {effort} · requested tier {tier}. "
+                    "Only the model is confirmed by this hook."
+                )
+            else:
+                message = (
+                    f"cx route mismatch: requested model {expected_model}, but Codex reports active model "
+                    f"{reported_model}; the explicit request is blocked (requested effort {effort} · "
+                    f"requested tier {tier})."
+                )
+        else:
+            message = (
+                f"cx queued {expected_model} · {effort} · {tier}, but Codex's active model was not reported; "
+                "the explicit request is blocked because the route is unverified."
+            )
+        response = {"systemMessage": message}
+        if not isinstance(reported_model, str) or not reported_model or reported_model != expected_model:
+            response.update(
+                decision="block",
+                reason="cx could not verify the requested model for this explicit route.",
+            )
+        return HookOutcome(response, None, "handoff")
+
+    task = _cx_task(prompt)
+    if task is None:
+        return HookOutcome(None, None, "not_routed")
+    if not task:
+        return HookOutcome(
+            {
+                "decision": "block",
+                "reason": "$cx needs a task to route.",
+                "systemMessage": "Usage: $cx <task>",
+            },
+            None,
+            "empty_cx",
+        )
 
     try:
-        decision = route_for_task(prompt)
+        decision = route_for_task(task)
     except (OSError, RuntimeError, ValueError, KeyError):
         return HookOutcome(
             {
-                "systemMessage": "cx routing is unavailable; check `cx doctor` and `cx models refresh`. "
-                "Letting the original prompt continue on the current model."
+                "decision": "block",
+                "reason": "cx could not select a route for this explicit request.",
+                "systemMessage": "cx could not select a route; this explicit request is blocked. Check `cx doctor` "
+                "and `cx models refresh`, then retry with `$cx <task>`."
             },
             None,
             "route_failed",
         )
 
     try:
-        command = build_queue_command(decision, prompt, session_id, codex_bin=codex_bin)
-        mark_handoff(state_dir, session_id, prompt)
+        command = build_queue_command(decision, task, session_id, codex_bin=codex_bin)
+        queued_prompt = command[command.index("--message") + 1]
+        mark_handoff(state_dir, session_id, queued_prompt, decision)
     except (OSError, ValueError):
         return HookOutcome(
             {
-                "systemMessage": "cx could not prepare the routed turn; letting the original prompt continue "
-                "on the current model."
+                "decision": "block",
+                "reason": "cx could not prepare this explicit routed request.",
+                "systemMessage": "cx could not prepare the routed turn; this explicit request is blocked. "
+                "Check `cx doctor`, then retry with `$cx <task>`."
             },
             decision,
             "queue_failed",
@@ -187,7 +267,10 @@ def handle_prompt_submit(
     elapsed = round(time.monotonic() - started, 3)
     if returncode == 0:
         tier = {"fast": "Fast", "default": "Standard"}.get(decision.service_tier, "Codex default")
-        message = f"cx routed this turn to {decision.model_id} · {decision.effort} · {tier}"
+        message = (
+            f"cx queued route {decision.model_id} · requested effort {decision.effort} · requested tier {tier}; "
+            "awaiting active-model confirmation"
+        )
         return HookOutcome(
             {
                 "decision": "block",
@@ -203,8 +286,10 @@ def handle_prompt_submit(
     clear_handoff(state_dir, session_id)
     return HookOutcome(
         {
-            "systemMessage": "cx could not queue the routed turn; letting the original prompt continue on the "
-            "current model."
+            "decision": "block",
+            "reason": "cx could not queue this explicit routed request.",
+            "systemMessage": "cx could not queue the routed turn; this explicit request is blocked. "
+            "Check `cx doctor`, then retry with `$cx <task>`."
         },
         decision,
         "queue_failed",
@@ -247,7 +332,7 @@ def _is_cx_hook(hook: Any) -> bool:
     if (
         not isinstance(hook, dict)
         or hook.get("type") != "command"
-        or hook.get("statusMessage") != _CX_STATUS_MESSAGE
+        or hook.get("statusMessage") not in {_CX_STATUS_MESSAGE, _OLD_CX_STATUS_MESSAGE}
         or not isinstance(hook.get("command"), str)
     ):
         return False
@@ -291,8 +376,19 @@ def install_prompt_hook(hooks_path: Path, command: str) -> tuple[bool, Path | No
     event = data["hooks"].setdefault("UserPromptSubmit", [])
     if not isinstance(event, list):
         raise ValueError("Codex UserPromptSubmit hooks must be a JSON array")
-    if any(isinstance(group, dict) and any(_is_cx_hook(hook) for hook in group.get("hooks", [])) for group in event):
-        return False, None
+    for group in event:
+        if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+            continue
+        for hook in group["hooks"]:
+            if not _is_cx_hook(hook):
+                continue
+            if hook.get("command") == command and hook.get("statusMessage") == _CX_STATUS_MESSAGE:
+                return False, None
+            backup = _backup_config(hooks_path)
+            hook["command"] = command
+            hook["statusMessage"] = _CX_STATUS_MESSAGE
+            _atomic_write(hooks_path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+            return True, backup
     event.append(
         {
             "hooks": [

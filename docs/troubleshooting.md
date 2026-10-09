@@ -26,7 +26,7 @@ Run `cx models` to inspect advertised efforts. Use `cx --model <id> --effort <le
 
 ## The regular TUI did not route a prompt
 
-Run `cx hooks status`, open a new session after installation, and use `/hooks` to review/trust the local command hook. The original prompt is blocked only when `codex queue` confirms the same-session handoff; otherwise it continues on the current model. Look for the visible `cx routed this turn to ...` message and check `/status` or the model picker for the active model. If the message and indicator disagree, uninstall the hook with `cx hooks uninstall` and report the Codex CLI version plus the sanitized routing status (do not share auth files or prompt text).
+Run `cx hooks status`, open a new session after installation, and use `/hooks` to review/trust the local command hook. The first notice says which route was requested. The queued prompt's second hook pass reports whether Codex's active model matches, differs, or was unavailable. `/status` also shows the active model. If `cx` reports a mismatch or says the model is unverified, that explicit `$cx` task is blocked. Correct the router or session before retrying; do not infer that the requested model ran. Share only the Codex CLI version and sanitized routing status; never share auth files or prompt text.
 
 ## A routed task exited successfully but seems incomplete
 

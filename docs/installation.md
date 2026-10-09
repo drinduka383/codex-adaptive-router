@@ -18,9 +18,9 @@ ln -s "$(pwd)/bin/cx" "$HOME/.local/bin/cx"
 
 The project needs Python 3.11+ and a Codex CLI whose `codex debug models --bundled` output is understood by `cx`. Run `cx doctor` after Codex upgrades.
 
-## Per-turn routing in the Codex TUI
+## Explicit per-prompt routing in the Codex TUI
 
-`cx` can route prompts in a regular `codex` session through Codex's `UserPromptSubmit` hook and the installed CLI's `codex queue` command. This keeps the current conversation and its scrollback; it does not start a separate `cx` TUI.
+The `UserPromptSubmit` hook adds `$cx <task>` as an explicit, one-turn route in a regular `codex` session. It queues the task on the same conversation and keeps the existing scrollback; it does not start a separate TUI.
 
 Run `cx models` before enabling the hook so the local model capability registry is ready. The hook uses that cached registry and does not refresh models on every turn.
 
@@ -29,22 +29,24 @@ cx hooks status
 cx hooks install
 ```
 
-Installation backs up `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) before adding the router hook, preserving other entries. If it finds the router's older marked hook block in `config.toml`, it backs up that file and moves the entry into `hooks.json`; this keeps one hook representation in the user configuration layer. Start a new Codex session and use `/hooks` to review and trust the local command. The hook displays the selected model, effort, and tier through Codex's visible `systemMessage`; check the TUI model indicator too, because queue-based model changes depend on the installed runtime. See the [official Hooks documentation](https://learn.chatgpt.com/docs/hooks) for hook trust and event behavior.
+Installation backs up `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) before adding the router hook, preserving other entries. If it finds the router's older marked hook block in `config.toml`, it backs up that file and moves the entry into `hooks.json`, keeping one hook representation in the user configuration layer. Start a new session and use `/hooks` to review and trust the local command. Run `cx hooks status` to check installation.
 
-To disable automatic routing, run `cx hooks uninstall`; this removes only the router hook from `hooks.json` and any older marked block in `config.toml`, backing up each changed file. Restart active Codex sessions after install or removal. A routing or queue failure is fail-open: Codex continues the original prompt on its current model.
+Type `$cx inspect the four authentication modules` to route one task. Ordinary prompts do not get classified or rerouted. The hook removes `$cx`, selects a route locally, and queues the task on the current thread. If route selection or queueing fails, or the next hook pass cannot confirm the requested model, Codex blocks that explicit task instead of running it on the previously selected model. The hook event exposes the active model slug, but not the effective reasoning effort or service tier; use the statusline or `/status` to inspect model and reasoning effort. See the [official Hooks documentation](https://learn.chatgpt.com/docs/hooks) for hook payload and event behavior.
 
-The plugin itself is still only a management skill. Codex CLI 0.162.0 lists plugin hooks as removed, so the hook is installed in the user's `hooks.json` rather than claimed as plugin-installed behavior. The current project has not yet confirmed that `codex queue --model` updates the TUI's footer indicator; see the compatibility note in the README.
+To disable in-session routing, run `cx hooks uninstall`; this removes only the router hook from `hooks.json` and any older marked block in `config.toml`, backing up each changed file. Restart active Codex sessions after install or removal.
+
+The plugin packages a management skill and an explicit `$cx` invocation skill. Codex CLI 0.162.0 does not support plugin hooks, so the actual routing hook remains installed separately in the user's `hooks.json`. The route confirmation uses the next `UserPromptSubmit` event; the hook payload confirms the active model slug only, while effort and tier remain unverified by the hook.
 
 ## Plugin
 
-The root `plugin.json` packages the management skill. From the checkout root, load and install it with:
+The root `plugin.json` packages both skills. From the checkout root, load and install the plugin with:
 
 ```sh
-codex plugin marketplace add ./.agents/plugins
+codex plugin marketplace add .
 codex plugin add codex-adaptive-router --marketplace codex-adaptive-router-local
 ```
 
-This changes Codex plugin configuration and is optional; `cx` itself does not require plugin activation. Remove it with:
+Plugin installation makes `$cx` discoverable from the TUI; the router CLI and separately installed hook perform the routing. Remove the plugin with:
 
 ```sh
 codex plugin remove codex-adaptive-router --marketplace codex-adaptive-router-local

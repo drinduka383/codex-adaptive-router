@@ -78,7 +78,7 @@ class CliTests(unittest.TestCase):
                 'type = "command"\n'
                 'command = "/tmp/cx hook-submit"\n'
                 "timeout = 60\n"
-                'statusMessage = "cx is selecting a model for this turn"\n'
+                'statusMessage = "cx is checking for an explicit $cx request"\n'
                 "# END CODEX ADAPTIVE ROUTER (cx)\n"
             )
             config.write_text(original_config + legacy_block, encoding="utf-8")
@@ -100,7 +100,8 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["hooks", "status"]), 0)
                 self.assertEqual(main(["hooks", "uninstall"]), 0)
 
-            self.assertIn("TUI prompt routing hook installed", output.getvalue())
+            self.assertIn("Explicit $cx TUI routing enabled", output.getvalue())
+            self.assertIn("Explicit $cx TUI routing: enabled", output.getvalue())
             self.assertEqual(config.read_text(encoding="utf-8"), original_config)
             self.assertEqual(json.loads(hooks_path.read_text(encoding="utf-8")), original_hooks)
             self.assertTrue(list(codex_home.glob("config.toml.cx-backup-*")))
@@ -129,7 +130,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stdin = io.StringIO(
-                json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "thread-test", "prompt": task})
+                json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "thread-test", "prompt": f"$cx {task}"})
             )
             stdout = io.StringIO()
             completed = subprocess.CompletedProcess([], 0, stdout="", stderr="")
@@ -138,7 +139,7 @@ class CliTests(unittest.TestCase):
                     os.environ,
                     {"XDG_CONFIG_HOME": str(root / "config"), "XDG_STATE_HOME": str(root / "state")},
                 ),
-                patch("codex_adaptive_router.cli._codex_bin", return_value="codex-test"),
+                patch("codex_adaptive_router.cli.shutil.which", return_value=None),
                 patch("codex_adaptive_router.cli.check_chatgpt_auth"),
                 patch(
                     "codex_adaptive_router.cli.read_registry",
@@ -159,7 +160,7 @@ class CliTests(unittest.TestCase):
             metrics = root / "state" / "codex-adaptive-router" / "runs.jsonl"
             self.assertNotIn(task, metrics.read_text(encoding="utf-8"))
 
-    def test_hook_submit_failure_allows_original_prompt_to_continue(self):
+    def test_hook_submit_failure_blocks_explicit_route(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stdin = io.StringIO(
@@ -167,7 +168,7 @@ class CliTests(unittest.TestCase):
                     {
                         "hook_event_name": "UserPromptSubmit",
                         "session_id": "thread-test",
-                        "prompt": "inspect a local module",
+                        "prompt": "$cx inspect a local module",
                     }
                 )
             )
@@ -208,10 +209,10 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["hook-submit"]), 0)
 
             response = json.loads(stdout.getvalue())
-            self.assertNotIn("decision", response)
-            self.assertIn("letting the original prompt continue", response["systemMessage"].lower())
+            self.assertEqual(response["decision"], "block")
+            self.assertIn("explicit request is blocked", response["systemMessage"].lower())
 
-    def test_hook_submit_without_cached_registry_fails_open_without_discovery(self):
+    def test_hook_submit_without_cached_registry_blocks_explicit_route(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             stdin = io.StringIO(
@@ -219,7 +220,7 @@ class CliTests(unittest.TestCase):
                     {
                         "hook_event_name": "UserPromptSubmit",
                         "session_id": "thread-test",
-                        "prompt": "inspect a local module",
+                        "prompt": "$cx inspect a local module",
                     }
                 )
             )
@@ -240,11 +241,43 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(["hook-submit"]), 0)
 
             response = json.loads(stdout.getvalue())
-            self.assertNotIn("decision", response)
-            self.assertIn("letting the original prompt continue", response["systemMessage"].lower())
+            self.assertEqual(response["decision"], "block")
+            self.assertIn("explicit request is blocked", response["systemMessage"].lower())
             self.assertIn("cx models refresh", response["systemMessage"])
             queue.assert_not_called()
             route.assert_not_called()
+
+    def test_hook_submit_ignores_unmarked_prompts_without_model_calls(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            stdin = io.StringIO(
+                json.dumps(
+                    {
+                        "hook_event_name": "UserPromptSubmit",
+                        "session_id": "thread-test",
+                        "prompt": "implement pagination",
+                    }
+                )
+            )
+            stdout = io.StringIO()
+            with (
+                patch.dict(
+                    os.environ,
+                    {"XDG_CONFIG_HOME": str(root / "config"), "XDG_STATE_HOME": str(root / "state")},
+                ),
+                patch("codex_adaptive_router.cli.shutil.which", return_value=None),
+                patch("codex_adaptive_router.cli.check_chatgpt_auth") as auth,
+                patch("codex_adaptive_router.cli.read_registry") as discovery,
+                patch("codex_adaptive_router.cli.subprocess.run") as queue,
+                patch("sys.stdin", stdin),
+                contextlib.redirect_stdout(stdout),
+            ):
+                self.assertEqual(main(["hook-submit"]), 0)
+
+            self.assertEqual(stdout.getvalue(), "")
+            auth.assert_not_called()
+            discovery.assert_not_called()
+            queue.assert_not_called()
 
 
 if __name__ == "__main__":
