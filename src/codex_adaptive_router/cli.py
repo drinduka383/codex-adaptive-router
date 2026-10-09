@@ -28,9 +28,12 @@ from .evaluation import run_evaluation, validate_evaluation_request
 from .execution import build_interactive_command, check_chatgpt_auth, run_interactive, safe_environment
 from .hooks import (
     codex_config_path,
+    codex_hooks_path,
     handle_prompt_submit,
     install_prompt_hook,
+    legacy_prompt_hook_installed,
     prompt_hook_installed,
+    remove_legacy_prompt_hook,
     remove_prompt_hook,
 )
 from .metrics import append_event, config_directory, new_run_id, read_events, state_directory, update_feedback, utc_now
@@ -603,9 +606,12 @@ def _hooks_command(argv: Sequence[str], env: dict[str, str]) -> int:
     parser.add_argument("action", nargs="?", choices=("status", "install", "uninstall"), default="status")
     args = parser.parse_args(list(argv))
     config_path = codex_config_path(env)
+    hooks_path = codex_hooks_path(env)
     if args.action == "status":
-        print(f"Codex config: {config_path}")
-        print(f"Per-turn routing hook: {'installed' if prompt_hook_installed(config_path) else 'not installed'}")
+        print(f"Codex hooks: {hooks_path}")
+        print(f"Per-turn routing hook: {'installed' if prompt_hook_installed(hooks_path) else 'not installed'}")
+        if legacy_prompt_hook_installed(config_path):
+            print("Legacy inline hook in config.toml; run `cx hooks install` to move it into hooks.json.")
         return 0
     if args.action == "install":
         executable = shutil.which("cx")
@@ -615,20 +621,28 @@ def _hooks_command(argv: Sequence[str], env: dict[str, str]) -> int:
                 executable = str(candidate.resolve())
         if not executable:
             raise RuntimeError("cx is not available on PATH; install the CLI before installing its Codex hook")
-        installed, backup = install_prompt_hook(
-            config_path,
+        installed, hooks_backup = install_prompt_hook(
+            hooks_path,
             shlex.join((str(Path(executable).resolve()), "hook-submit")),
         )
-        print(f"TUI prompt routing hook {'installed' if installed else 'already installed'}.")
-        if backup:
-            print(f"Codex config backup: {backup}")
-        if installed:
+        legacy_removed, config_backup = remove_legacy_prompt_hook(config_path)
+        changed = installed or legacy_removed
+        print(f"TUI prompt routing hook {'installed' if changed else 'already installed'}.")
+        if hooks_backup:
+            print(f"Codex hooks backup: {hooks_backup}")
+        if config_backup:
+            print(f"Codex config backup: {config_backup}")
+        if changed:
             print("Open a new Codex session, then use /hooks to review and trust the local command hook.")
         return 0
-    removed, backup = remove_prompt_hook(config_path)
+    removed_json, hooks_backup = remove_prompt_hook(hooks_path)
+    removed_legacy, config_backup = remove_legacy_prompt_hook(config_path)
+    removed = removed_json or removed_legacy
     print(f"TUI prompt routing hook {'removed' if removed else 'not installed'}.")
-    if backup:
-        print(f"Codex config backup: {backup}")
+    if hooks_backup:
+        print(f"Codex hooks backup: {hooks_backup}")
+    if config_backup:
+        print(f"Codex config backup: {config_backup}")
     if removed:
         print("Restart Codex sessions to unload the hook.")
     return 0

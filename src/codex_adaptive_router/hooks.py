@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -18,6 +19,7 @@ from .models import RoutingDecision
 
 _BEGIN = "# BEGIN CODEX ADAPTIVE ROUTER (cx)"
 _END = "# END CODEX ADAPTIVE ROUTER (cx)"
+_CX_STATUS_MESSAGE = "cx is selecting a model for this turn"
 # shortcut: one hash-only handoff per session for 30s; use turn IDs if concurrent queued prompts are added.
 _HANDOFF_TTL_SECONDS = 30
 
@@ -35,6 +37,12 @@ def codex_config_path(env: dict[str, str] | None = None) -> Path:
     values = os.environ if env is None else env
     root = Path(values.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
     return root / "config.toml"
+
+
+def codex_hooks_path(env: dict[str, str] | None = None) -> Path:
+    values = os.environ if env is None else env
+    root = Path(values.get("CODEX_HOME") or Path.home() / ".codex").expanduser()
+    return root / "hooks.json"
 
 
 def build_queue_command(
@@ -235,7 +243,43 @@ def _atomic_write(path: Path, text: str) -> None:
             os.unlink(temporary)
 
 
-def prompt_hook_installed(config_path: Path) -> bool:
+def _is_cx_hook(hook: Any) -> bool:
+    if (
+        not isinstance(hook, dict)
+        or hook.get("type") != "command"
+        or hook.get("statusMessage") != _CX_STATUS_MESSAGE
+        or not isinstance(hook.get("command"), str)
+    ):
+        return False
+    try:
+        command = shlex.split(hook["command"])
+    except ValueError:
+        return False
+    return len(command) == 2 and Path(command[0]).name == "cx" and command[1] == "hook-submit"
+
+
+def _read_hooks_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot safely edit Codex hooks file: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("Codex hooks file must contain a JSON object")
+    hooks = data.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        raise ValueError("Codex hooks file must contain a hooks object")
+    return data
+
+
+def prompt_hook_installed(hooks_path: Path) -> bool:
+    event = _read_hooks_file(hooks_path)["hooks"].get("UserPromptSubmit", [])
+    return isinstance(event, list) and any(
+        isinstance(group, dict) and any(_is_cx_hook(hook) for hook in group.get("hooks", []))
+        for group in event
+    )
+
+
+def legacy_prompt_hook_installed(config_path: Path) -> bool:
     try:
         text = config_path.read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -243,39 +287,62 @@ def prompt_hook_installed(config_path: Path) -> bool:
     return _BEGIN in text and _END in text
 
 
-def install_prompt_hook(config_path: Path, command: str) -> tuple[bool, Path | None]:
-    try:
-        current = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
-        tomllib.loads(current)
-    except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise ValueError(f"cannot safely edit Codex config: {exc}") from exc
-    if _BEGIN in current or _END in current:
-        if _BEGIN in current and _END in current:
-            return False, None
-        raise ValueError("Codex config contains an incomplete cx hook block")
-    block = "\n".join(
-        (
-            _BEGIN,
-            "[[hooks.UserPromptSubmit]]",
-            "[[hooks.UserPromptSubmit.hooks]]",
-            'type = "command"',
-            f"command = {json.dumps(command)}",
-            "timeout = 60",
-            'statusMessage = "cx is selecting a model for this turn"',
-            _END,
-        )
+def install_prompt_hook(hooks_path: Path, command: str) -> tuple[bool, Path | None]:
+    data = _read_hooks_file(hooks_path)
+    event = data["hooks"].setdefault("UserPromptSubmit", [])
+    if not isinstance(event, list):
+        raise ValueError("Codex UserPromptSubmit hooks must be a JSON array")
+    if any(isinstance(group, dict) and any(_is_cx_hook(hook) for hook in group.get("hooks", [])) for group in event):
+        return False, None
+    event.append(
+        {
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command,
+                    "timeout": 60,
+                    "statusMessage": _CX_STATUS_MESSAGE,
+                }
+            ]
+        }
     )
-    updated = f"{current.rstrip()}\n\n{block}\n" if current.strip() else f"{block}\n"
-    try:
-        tomllib.loads(updated)
-    except tomllib.TOMLDecodeError as exc:
-        raise ValueError(f"cx hook block would make Codex config invalid: {exc}") from exc
-    backup = _backup_config(config_path)
-    _atomic_write(config_path, updated)
+    backup = _backup_config(hooks_path)
+    _atomic_write(hooks_path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
     return True, backup
 
 
-def remove_prompt_hook(config_path: Path) -> tuple[bool, Path | None]:
+def remove_prompt_hook(hooks_path: Path) -> tuple[bool, Path | None]:
+    data = _read_hooks_file(hooks_path)
+    event = data["hooks"].get("UserPromptSubmit")
+    if not isinstance(event, list):
+        return False, None
+    updated_event = []
+    removed = False
+    for group in event:
+        if not isinstance(group, dict) or not isinstance(group.get("hooks"), list):
+            updated_event.append(group)
+            continue
+        handlers = [hook for hook in group["hooks"] if not _is_cx_hook(hook)]
+        if len(handlers) == len(group["hooks"]):
+            updated_event.append(group)
+            continue
+        removed = True
+        if handlers:
+            updated_event.append({**group, "hooks": handlers})
+        elif set(group) != {"hooks"}:
+            updated_event.append({**group, "hooks": []})
+    if not removed:
+        return False, None
+    if updated_event:
+        data["hooks"]["UserPromptSubmit"] = updated_event
+    else:
+        data["hooks"].pop("UserPromptSubmit")
+    backup = _backup_config(hooks_path)
+    _atomic_write(hooks_path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+    return True, backup
+
+
+def remove_legacy_prompt_hook(config_path: Path) -> tuple[bool, Path | None]:
     try:
         current = config_path.read_text(encoding="utf-8")
     except FileNotFoundError:

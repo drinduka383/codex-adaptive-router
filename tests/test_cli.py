@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from importlib.resources import files
 from pathlib import Path
@@ -63,14 +64,29 @@ class CliTests(unittest.TestCase):
         self.assertIn("test-model", output.getvalue())
         run.assert_not_called()
 
-    def test_hooks_install_and_uninstall_preserve_existing_codex_config(self):
+    def test_hooks_install_migrates_inline_hook_and_preserves_existing_hooks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             codex_home = root / "codex"
             codex_home.mkdir()
             config = codex_home / "config.toml"
-            original = "[features]\nfast_mode = true\n\n[hooks]\n"
-            config.write_text(original, encoding="utf-8")
+            original_config = "[features]\nfast_mode = true\n"
+            legacy_block = (
+                "\n# BEGIN CODEX ADAPTIVE ROUTER (cx)\n"
+                "[[hooks.UserPromptSubmit]]\n"
+                "[[hooks.UserPromptSubmit.hooks]]\n"
+                'type = "command"\n'
+                'command = "/tmp/cx hook-submit"\n'
+                "timeout = 60\n"
+                'statusMessage = "cx is selecting a model for this turn"\n'
+                "# END CODEX ADAPTIVE ROUTER (cx)\n"
+            )
+            config.write_text(original_config + legacy_block, encoding="utf-8")
+            hooks_path = codex_home / "hooks.json"
+            original_hooks = {
+                "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/tmp/stop-hook"}]}]}
+            }
+            hooks_path.write_text(json.dumps(original_hooks), encoding="utf-8")
             output = io.StringIO()
             with (
                 patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}),
@@ -78,14 +94,19 @@ class CliTests(unittest.TestCase):
                 contextlib.redirect_stdout(output),
             ):
                 self.assertEqual(main(["hooks", "install"]), 0)
-                installed = config.read_text(encoding="utf-8")
+                installed_hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
+                self.assertEqual(installed_hooks["hooks"]["Stop"], original_hooks["hooks"]["Stop"])
+                self.assertEqual(len(installed_hooks["hooks"]["UserPromptSubmit"]), 1)
+                self.assertEqual(tomllib.loads(config.read_text(encoding="utf-8")), {"features": {"fast_mode": True}})
                 self.assertEqual(main(["hooks", "install"]), 0)
+                self.assertEqual(main(["hooks", "status"]), 0)
                 self.assertEqual(main(["hooks", "uninstall"]), 0)
 
             self.assertIn("TUI prompt routing hook installed", output.getvalue())
-            self.assertEqual(config.read_text(encoding="utf-8"), original)
+            self.assertEqual(config.read_text(encoding="utf-8"), original_config)
+            self.assertEqual(json.loads(hooks_path.read_text(encoding="utf-8")), original_hooks)
             self.assertTrue(list(codex_home.glob("config.toml.cx-backup-*")))
-            self.assertNotEqual(installed, original)
+            self.assertTrue(list(codex_home.glob("hooks.json.cx-backup-*")))
 
     def test_hook_submit_queues_once_and_does_not_log_prompt(self):
         task = "inspect a local module without editing it"

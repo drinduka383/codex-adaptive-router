@@ -6,7 +6,7 @@
 - Prompts, source files, and model output are not written to router logs. Evaluation response files are temporary and removed after each case.
 - Evaluation requires `--confirm-usage`, uses ephemeral sessions and a read-only sandbox, caps models/cases, and has a timeout.
 - Subprocesses use an argument array. User task text is one argument, never shell source.
-- The optional `cx hooks install` command backs up `config.toml` before adding one marked user hook block; `cx hooks uninstall` removes only that block. It does not change Codex model defaults, custom agents, skills, plugins, or marketplaces.
+- The optional `cx hooks install` command backs up `hooks.json` before adding the router hook and preserves other entries. It migrates only the router's marked legacy block from `config.toml`; uninstall removes only the router hook and any such legacy block. It does not change Codex model defaults, custom agents, skills, plugins, or marketplaces.
 - The prompt hook uses the current ChatGPT login, strips API-key/base-URL environment overrides, stores no prompt text, and uses a temporary hash only for one-time handoff detection. If authentication, discovery, or queueing fails, it lets the original prompt continue on the current model.
 - Orchestrated children share the working tree. The coordinator is instructed to use read-only tasks or disjoint file ownership, but that is not a filesystem-enforced boundary.
 - GitHub Actions runs only tests and packaging. It requires no Codex credentials and does not perform model evaluations.

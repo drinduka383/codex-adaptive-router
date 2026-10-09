@@ -29,11 +29,11 @@ cx hooks status
 cx hooks install
 ```
 
-Installation backs up `~/.codex/config.toml` (or `$CODEX_HOME/config.toml`) before adding one marked hook block. It validates TOML first and preserves all other settings and hooks. Start a new Codex session and use `/hooks` to review and trust the local command. The hook displays the selected model, effort, and tier through Codex's visible `systemMessage`; check the TUI model indicator too, because queue-based model changes depend on the installed runtime. See the [official Hooks documentation](https://learn.chatgpt.com/docs/hooks) for hook trust and event behavior.
+Installation backs up `~/.codex/hooks.json` (or `$CODEX_HOME/hooks.json`) before adding the router hook, preserving other entries. If it finds the router's older marked hook block in `config.toml`, it backs up that file and moves the entry into `hooks.json`; this keeps one hook representation in the user configuration layer. Start a new Codex session and use `/hooks` to review and trust the local command. The hook displays the selected model, effort, and tier through Codex's visible `systemMessage`; check the TUI model indicator too, because queue-based model changes depend on the installed runtime. See the [official Hooks documentation](https://learn.chatgpt.com/docs/hooks) for hook trust and event behavior.
 
-To disable automatic routing, run `cx hooks uninstall`; this removes only the marked block and makes another timestamped backup. Restart active Codex sessions after install or removal. A routing or queue failure is fail-open: Codex continues the original prompt on its current model.
+To disable automatic routing, run `cx hooks uninstall`; this removes only the router hook from `hooks.json` and any older marked block in `config.toml`, backing up each changed file. Restart active Codex sessions after install or removal. A routing or queue failure is fail-open: Codex continues the original prompt on its current model.
 
-The plugin itself is still only a management skill. Codex CLI 0.162.0 lists plugin hooks as removed, so the hook must be installed through the user's config rather than claimed as plugin-installed behavior. The current project has not yet confirmed that `codex queue --model` updates the TUI's footer indicator; see the compatibility note in the README.
+The plugin itself is still only a management skill. Codex CLI 0.162.0 lists plugin hooks as removed, so the hook is installed in the user's `hooks.json` rather than claimed as plugin-installed behavior. The current project has not yet confirmed that `codex queue --model` updates the TUI's footer indicator; see the compatibility note in the README.
 
 ## Plugin
 

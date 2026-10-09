@@ -1,5 +1,5 @@
+import json
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 
@@ -8,6 +8,7 @@ from codex_adaptive_router.hooks import (
     consume_handoff,
     handle_prompt_submit,
     install_prompt_hook,
+    prompt_hook_installed,
     remove_prompt_hook,
 )
 from codex_adaptive_router.models import RoutingDecision, TaskSignals
@@ -109,24 +110,48 @@ class HookTests(unittest.TestCase):
             self.assertIsNone(outcome.response)
             self.assertEqual(outcome.status, "handoff")
 
-    def test_hook_install_is_idempotent_and_remove_preserves_existing_config(self):
+    def test_hook_json_install_is_idempotent_and_preserves_existing_hooks(self):
         with tempfile.TemporaryDirectory() as directory:
-            config = Path(directory) / "config.toml"
-            original = "[features]\nfast_mode = true\n\n[hooks]\n"
-            config.write_text(original, encoding="utf-8")
+            config = Path(directory) / "hooks.json"
+            original = {
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "/tmp/stop-hook"}]}],
+                    "UserPromptSubmit": [
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "/tmp/cx hook-submit",
+                                    "statusMessage": "another prompt hook",
+                                }
+                            ]
+                        }
+                    ],
+                }
+            }
+            config.write_text(json.dumps(original), encoding="utf-8")
 
             installed_now, _ = install_prompt_hook(config, "/tmp/cx hook-submit")
             self.assertTrue(installed_now)
-            installed = config.read_text(encoding="utf-8")
-            self.assertIn("UserPromptSubmit", installed)
-            self.assertIn("/tmp/cx hook-submit", installed)
-            parsed = tomllib.loads(installed)
-            self.assertEqual(len(parsed["hooks"]["UserPromptSubmit"]), 1)
+            installed = json.loads(config.read_text(encoding="utf-8"))
+            self.assertEqual(installed["hooks"]["Stop"], original["hooks"]["Stop"])
+            self.assertEqual(len(installed["hooks"]["UserPromptSubmit"]), 2)
+            self.assertTrue(prompt_hook_installed(config))
             installed_now, _ = install_prompt_hook(config, "/tmp/cx hook-submit")
             self.assertFalse(installed_now)
             removed_now, _ = remove_prompt_hook(config)
             self.assertTrue(removed_now)
-            self.assertEqual(config.read_text(encoding="utf-8"), original)
+            self.assertEqual(json.loads(config.read_text(encoding="utf-8")), original)
+
+    def test_hook_json_install_refuses_to_overwrite_invalid_json(self):
+        with tempfile.TemporaryDirectory() as directory:
+            hooks_file = Path(directory) / "hooks.json"
+            hooks_file.write_text("{invalid", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "cannot safely edit Codex hooks file"):
+                install_prompt_hook(hooks_file, "/tmp/cx hook-submit")
+
+            self.assertEqual(hooks_file.read_text(encoding="utf-8"), "{invalid")
 
 
 if __name__ == "__main__":
