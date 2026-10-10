@@ -8,16 +8,24 @@ The goal is to complete more verified work per unit of Codex allowance while con
 
 Requirements: Python 3.11 or newer and a ChatGPT-authenticated Codex CLI. The current development environment is Codex CLI 0.162.0 on Fedora Linux.
 
-From a checkout:
+Install the CLI directly from the public GitHub repository with `pipx`:
 
 ```sh
-python3 -m pip install --user .
+pipx install git+https://github.com/drinduka383/codex-adaptive-router.git
+cx config init
+cx doctor
+```
+
+This keeps `cx` in an isolated Python environment. It does not install a Codex plugin or modify Codex authentication. To install from a local checkout instead:
+
+```sh
+pipx install .
 cx config init
 cx doctor
 cx models
 ```
 
-If your Python installation does not expose user scripts on `PATH`, install with `pipx install .` or add the resulting script directory to `PATH`. To use a checkout without packaging, link `bin/cx` into a directory already on `PATH`:
+To use a checkout without packaging, link `bin/cx` into a directory already on `PATH`:
 
 ```sh
 ln -s "$(pwd)/bin/cx" "$HOME/.local/bin/cx"
@@ -128,15 +136,19 @@ An exit code of zero is not treated as a verified task success. After reviewing 
 
 ## Plugin
 
-The repository root contains a plugin manifest, a `codex-adaptive-router` management skill, and a `$cx` explicit invocation skill. The management skill explains the standalone CLI; the `$cx` skill makes one-turn routing discoverable. The hook is installed separately into the user's Codex config because the installed CLI does not support plugin hooks. From the checkout root, Codex CLI can install the local marketplace and plugin:
+The repository contains a plugin manifest, a `codex-adaptive-router` management skill, and a `$cx` explicit invocation skill. The management skill explains the standalone CLI; the `$cx` skill makes one-turn routing discoverable. Install the plugin from its public GitHub marketplace:
 
 ```sh
-codex plugin marketplace add .
+codex plugin marketplace add drinduka383/codex-adaptive-router
 codex plugin marketplace list
-codex plugin add codex-adaptive-router@codex-adaptive-router-local
+codex plugin add codex-adaptive-router --marketplace codex-adaptive-router-local
 ```
 
-The management skill delegates decisions to `cx`; the `$cx` skill exposes the explicit one-turn workflow. Plugin activation is separate from `cx hooks install` and is not performed by the package installer.
+The plugin provides skills; it does not install the `cx` executable. Install the CLI separately using the quick-start command above. Plugin installation also does not install the optional TUI hook; see [installation](docs/installation.md) for hook setup and removal.
+
+To have Codex install it, paste this prompt into a session:
+
+> Read the installation instructions at https://github.com/drinduka383/codex-adaptive-router. Inspect the package and plugin setup, install the `cx` CLI with `pipx` from the public repository, initialize its config, and run `cx doctor`. Then install the optional Codex plugin from the repository marketplace. Preserve my current Codex authentication and settings; do not install the TUI hook unless I ask. Report what you installed and how to uninstall it.
 
 ## Development
 

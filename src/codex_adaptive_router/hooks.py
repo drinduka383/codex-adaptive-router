@@ -176,11 +176,7 @@ def _app_server_socket_paths(env: dict[str, str] | None = None) -> list[Path]:
         root_info = socket_root.lstat()
     except OSError as exc:
         raise RuntimeError("No running Codex app-server socket was found.") from exc
-    if (
-        not stat.S_ISDIR(root_info.st_mode)
-        or root_info.st_uid != uid
-        or stat.S_IMODE(root_info.st_mode) & 0o077
-    ):
+    if not stat.S_ISDIR(root_info.st_mode) or root_info.st_uid != uid or stat.S_IMODE(root_info.st_mode) & 0o077:
         raise RuntimeError("The Codex app-server socket directory is not private; refusing to use it.")
     sockets = []
     for path in socket_root.iterdir():
@@ -278,9 +274,7 @@ def apply_thread_settings(
                     continue
                 if "error" in response:
                     code = (
-                        response["error"].get("code", "unknown")
-                        if isinstance(response["error"], dict)
-                        else "unknown"
+                        response["error"].get("code", "unknown") if isinstance(response["error"], dict) else "unknown"
                     )
                     raise RuntimeError(f"Codex rejected {method} (RPC error {code}).")
                 if "result" not in response:
@@ -352,9 +346,7 @@ def apply_thread_settings(
             return True
         except (OSError, ValueError, RuntimeError) as exc:
             last_error = (
-                str(exc)
-                if isinstance(exc, RuntimeError)
-                else f"Codex socket unavailable ({type(exc).__name__})."
+                str(exc) if isinstance(exc, RuntimeError) else f"Codex socket unavailable ({type(exc).__name__})."
             )
         finally:
             connection.close()
@@ -368,7 +360,7 @@ def _cx_task(prompt: str) -> str | None:
         if text == prefix:
             return ""
         if text.startswith(prefix) and len(text) > len(prefix) and text[len(prefix)].isspace():
-            return text[len(prefix):].strip()
+            return text[len(prefix) :].strip()
     return None
 
 
@@ -392,9 +384,7 @@ def handle_prompt_submit(
         expected_model = handoff.get("model_id")
         reported_model = event.get("model")
         effort = handoff.get("effort", "unknown")
-        tier = {"fast": "Fast", "default": "Standard"}.get(
-            handoff.get("service_tier"), "Codex default"
-        )
+        tier = {"fast": "Fast", "default": "Standard"}.get(handoff.get("service_tier"), "Codex default")
         if isinstance(reported_model, str) and reported_model:
             if reported_model == expected_model:
                 message = (
@@ -442,7 +432,7 @@ def handle_prompt_submit(
                 "decision": "block",
                 "reason": "cx could not select a route for this explicit request.",
                 "systemMessage": "cx could not select a route; this explicit request is blocked. Check `cx doctor` "
-                "and `cx models refresh`, then retry with `$cx <task>`."
+                "and `cx models refresh`, then retry with `$cx <task>`.",
             },
             None,
             "route_failed",
@@ -525,7 +515,7 @@ def handle_prompt_submit(
             "decision": "block",
             "reason": "cx could not queue this explicit routed request.",
             "systemMessage": "cx could not queue the routed turn; this explicit request is blocked. "
-            "Check `cx doctor`, then retry with `$cx <task>`."
+            "Check `cx doctor`, then retry with `$cx <task>`.",
         },
         decision,
         "queue_failed",

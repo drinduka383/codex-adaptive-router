@@ -87,14 +87,14 @@ class HookTests(unittest.TestCase):
                 size = second & 0x7F
                 offset = 2
                 if size == 126:
-                    size = int.from_bytes(data[offset:offset + 2], "big")
+                    size = int.from_bytes(data[offset : offset + 2], "big")
                     offset += 2
                 elif size == 127:
-                    size = int.from_bytes(data[offset:offset + 8], "big")
+                    size = int.from_bytes(data[offset : offset + 8], "big")
                     offset += 8
-                mask = data[offset:offset + 4]
+                mask = data[offset : offset + 4]
                 offset += 4
-                payload = bytes(value ^ mask[i % 4] for i, value in enumerate(data[offset:offset + size]))
+                payload = bytes(value ^ mask[i % 4] for i, value in enumerate(data[offset : offset + size]))
                 message = json.loads(payload)
                 self.messages.append(message)
                 if message.get("id") in {1, 2}:
@@ -120,12 +120,15 @@ class HookTests(unittest.TestCase):
             ["initialize", "initialized", "thread/settings/update"],
         )
         self.assertEqual(fake_socket.assert_text_opcode, 1)
-        self.assertEqual(fake_socket.messages[2]["params"], {
-            "threadId": "thread-123",
-            "model": "model-sol",
-            "effort": "medium",
-            "serviceTier": "fast",
-        })
+        self.assertEqual(
+            fake_socket.messages[2]["params"],
+            {
+                "threadId": "thread-123",
+                "model": "model-sol",
+                "effort": "medium",
+                "serviceTier": "fast",
+            },
+        )
 
     def test_queue_command_keeps_prompt_as_one_argument_and_selects_turn_settings(self):
         task = "inspect this; do not run shell commands"
@@ -385,12 +388,10 @@ class HookTests(unittest.TestCase):
                 },
                 state_dir=Path(directory),
                 route_for_task=lambda task: decision("sol", "model-sol", "medium"),
-                update_thread_settings=lambda thread_id, route: calls.append(
-                    ("settings", thread_id, route.model_id)
-                ) or True,
-                queue=lambda command: calls.append(
-                    ("queue", command[command.index("--model") + 1])
-                ) or 0,
+                update_thread_settings=lambda thread_id, route: (
+                    calls.append(("settings", thread_id, route.model_id)) or True
+                ),
+                queue=lambda command: calls.append(("queue", command[command.index("--model") + 1])) or 0,
             )
 
             self.assertEqual(calls, [("settings", "thread-123", "model-sol"), ("queue", "model-sol")])
@@ -505,9 +506,7 @@ class HookTests(unittest.TestCase):
             submit_hooks = installed["hooks"]["UserPromptSubmit"][0]["hooks"]
             self.assertEqual(len(submit_hooks), 1)
             self.assertEqual(submit_hooks[0]["command"], "/tmp/new/bin/cx hook-submit")
-            self.assertEqual(
-                submit_hooks[0]["statusMessage"], "cx is checking for an explicit $cx request"
-            )
+            self.assertEqual(submit_hooks[0]["statusMessage"], "cx is checking for an explicit $cx request")
             self.assertTrue(prompt_hook_installed(config))
 
 
